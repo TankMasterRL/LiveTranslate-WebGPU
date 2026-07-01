@@ -1,0 +1,175 @@
+<script lang="ts">
+  import type { CaptureKind } from '$lib/audio/source';
+  import type { WebGPUSupport } from '$lib/asr/webgpu';
+  import type { TranscriptionPipeline } from '$lib/pipeline.svelte';
+
+  interface Props {
+    pipeline: TranscriptionPipeline | null;
+    webgpu: WebGPUSupport | null;
+    captureKind: CaptureKind;
+    onStart: () => void;
+    onStop: () => void;
+  }
+
+  let {
+    pipeline,
+    webgpu,
+    captureKind = $bindable(),
+    onStart,
+    onStop
+  }: Props = $props();
+
+  const status = $derived(pipeline?.status ?? 'idle');
+  const busy = $derived(status === 'loading' || status === 'listening');
+  const levelPct = $derived(Math.min(100, Math.round((pipeline?.level ?? 0) * 400)));
+  const progressPct = $derived(Math.round((pipeline?.progress ?? 0) * 100));
+</script>
+
+<section class="panel">
+  <div class="head">
+    <h2>Live transcription</h2>
+    {#if webgpu}
+      <span class="badge" class:ok={webgpu.supported} title={webgpu.reason ?? ''}>
+        {webgpu.supported ? 'WebGPU ready' : 'WebGPU unavailable — WASM fallback'}
+      </span>
+    {/if}
+  </div>
+
+  <p class="note">
+    A cross-origin YouTube player's audio can't be read directly, so share this
+    <strong>tab's audio</strong> (or use the microphone) to transcribe what's playing.
+  </p>
+
+  <div class="row">
+    <label>
+      <span>Audio source</span>
+      <select bind:value={captureKind} disabled={busy}>
+        <option value="tab">Tab / system audio</option>
+        <option value="microphone">Microphone</option>
+      </select>
+    </label>
+
+    {#if status === 'listening'}
+      <button type="button" class="stop" onclick={onStop}>Stop</button>
+    {:else}
+      <button type="button" onclick={onStart} disabled={status === 'loading'}>
+        {status === 'loading' ? 'Loading model…' : 'Start transcription'}
+      </button>
+    {/if}
+  </div>
+
+  {#if status === 'loading' && progressPct > 0}
+    <div class="meter"><div class="fill" style:width="{progressPct}%"></div></div>
+    <p class="sub">Downloading Whisper weights… {progressPct}%</p>
+  {/if}
+
+  {#if status === 'listening'}
+    <div class="meter level"><div class="fill" style:width="{levelPct}%"></div></div>
+    <p class="sub">Listening — speak or play audio.</p>
+  {/if}
+
+  {#if pipeline?.notice}
+    <p class="sub warn">{pipeline.notice}</p>
+  {/if}
+  {#if pipeline?.error}
+    <p class="sub error" role="alert">{pipeline.error}</p>
+  {/if}
+</section>
+
+<style>
+  .panel {
+    background: var(--lt-panel);
+    border: 1px solid var(--lt-border);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  h2 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+  .badge {
+    font-size: 0.72rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(255, 128, 128, 0.15);
+    color: #ff9d9d;
+    border: 1px solid rgba(255, 128, 128, 0.4);
+  }
+  .badge.ok {
+    background: rgba(79, 255, 155, 0.12);
+    color: #74e0a0;
+    border-color: rgba(79, 255, 155, 0.4);
+  }
+  .note,
+  .sub {
+    margin: 0;
+    color: var(--lt-muted);
+    font-size: 0.82rem;
+  }
+  .row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--lt-muted);
+  }
+  select {
+    background: #0b0e14;
+    color: var(--lt-text);
+    border: 1px solid var(--lt-border);
+    border-radius: 0.35rem;
+    padding: 0.5rem 0.6rem;
+    font: inherit;
+  }
+  button {
+    background: var(--lt-accent);
+    color: #fff;
+    border: 0;
+    border-radius: 0.35rem;
+    padding: 0.55rem 1rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  button.stop {
+    background: #b3402f;
+  }
+  .meter {
+    height: 6px;
+    border-radius: 999px;
+    background: #0b0e14;
+    overflow: hidden;
+  }
+  .meter .fill {
+    height: 100%;
+    background: var(--lt-accent);
+    transition: width 0.1s linear;
+  }
+  .meter.level .fill {
+    background: #74e0a0;
+  }
+  .warn {
+    color: #ffcf8f;
+  }
+  .error {
+    color: #ff8080;
+  }
+</style>
