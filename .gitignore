@@ -1,0 +1,22 @@
+node_modules/
+
+# Build output
+/build/
+/.svelte-kit/
+/package/
+
+# Env & local
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Test / tooling artifacts
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/coverage/
+*.log
