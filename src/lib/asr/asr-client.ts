@@ -23,7 +23,7 @@ export class WhisperClient implements AsrEngine {
   readonly #language?: string;
   #seq = 0;
   #pending = new Map<number, { resolve: (text: string) => void; reject: (e: Error) => void }>();
-  #readyResolvers: Array<() => void> = [];
+  #readyResolvers: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
   #progress?: (fraction: number) => void;
 
   constructor(options: WhisperClientOptions = {}) {
@@ -38,8 +38,8 @@ export class WhisperClient implements AsrEngine {
   }
 
   load(backend: AsrBackend): Promise<void> {
-    return new Promise((resolve) => {
-      this.#readyResolvers.push(resolve);
+    return new Promise((resolve, reject) => {
+      this.#readyResolvers.push({ resolve, reject });
       this.#worker.postMessage({ type: 'load', model: this.#model, backend });
     });
   }
@@ -66,7 +66,7 @@ export class WhisperClient implements AsrEngine {
         if (typeof message.info?.progress === 'number') this.#progress?.(message.info.progress / 100);
         break;
       case 'ready':
-        this.#readyResolvers.shift()?.();
+        this.#readyResolvers.shift()?.resolve();
         break;
       case 'result':
         this.#pending.get(message.id)?.resolve(message.text);
@@ -76,6 +76,9 @@ export class WhisperClient implements AsrEngine {
         if (message.id != null) {
           this.#pending.get(message.id)?.reject(new Error(message.message));
           this.#pending.delete(message.id);
+        } else {
+          // Model load failed: reject pending load() calls instead of hanging.
+          this.#readyResolvers.shift()?.reject(new Error(message.message));
         }
         break;
     }

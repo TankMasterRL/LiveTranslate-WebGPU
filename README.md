@@ -18,7 +18,7 @@ The original desktop pipeline is reproduced with browser primitives:
 | WASAPI loopback (system audio) | `getDisplayMedia` tab/system audio · or microphone  |
 | Silero VAD                   | energy VAD with hangover (`src/lib/audio/vad.ts`)     |
 | faster-whisper ASR           | Whisper on **WebGPU** in a Web Worker (`src/lib/asr`) |
-| OpenAI-compatible LLM translate | `Translator` seam: identity / OpenAI-compatible API |
+| OpenAI-compatible LLM translate | local **WebGPU** model (opus-mt / NLLB-200) *or* OpenAI-compatible API |
 | PyQt transparent overlay     | positioned Svelte overlay on the YouTube embed        |
 
 ```
@@ -52,6 +52,23 @@ npm run dev            # http://localhost:5173
 3. **Start transcription**, pick *Tab / system audio* (share this tab **with audio**)
    or *Microphone*, and live subtitles appear over the video.
 
+## Translation
+
+Three modes in the **Translation** panel (default: off, transcribe-only):
+
+- **Local model (WebGPU)** — translation runs entirely in your browser:
+  - *Auto → English* uses `Xenova/opus-mt-mul-en` (~50 MB, fast, any source).
+  - Any other pair uses `Xenova/nllb-200-distilled-600M` (~600 MB q8, 12 curated
+    languages) and needs an explicit source language — Whisper doesn't reliably
+    report what it heard.
+  - Weights download once and are browser-cached.
+- **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
+  chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
+  browser and is only sent to the endpoint you configure.
+
+Settings apply live via `pipeline.setTranslator(...)` — no need to restart capture.
+Translation is best-effort: if it fails, the untranslated transcription still shows.
+
 ## Testing (red/green TDD)
 
 The DSP and app logic are covered by fast unit/component tests; the
@@ -71,7 +88,8 @@ src/lib/
   subtitles/  cue model, active-cue selection, reactive SubtitleTrack store
   audio/      capture (AudioWorklet), resample, framing, energy VAD, speech chunker
   asr/        WebGPU detection, transcript cleanup, Whisper worker + client
-  translate/  Translator interface, identity + OpenAI-compatible adapters
+  translate/  Translator seam: language/model selection, WebGPU translation
+              worker + client, OpenAI-compatible adapter, settings factory
   youtube/    IFrame Player API wrapper, URL parsing, embed component
   ui/         SubtitleOverlay, Controls, TranscribePanel, themes
   pipeline.svelte.ts   reactive orchestrator wiring it all together
@@ -79,10 +97,9 @@ src/lib/
 
 ## Roadmap
 
-- **Translation on WebGPU**: wire a client-side translation model (NLLB / Opus-MT)
-  behind the existing `Translator` seam, plus the OpenAI-compatible API path.
 - Silero-ONNX VAD as a drop-in upgrade for the energy VAD.
 - Per-cue timestamp alignment from Whisper chunk timestamps.
+- Persist settings (theme, translation config) across sessions.
 
 ## Credits
 

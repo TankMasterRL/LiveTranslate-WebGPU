@@ -75,12 +75,19 @@ export class TranscriptionPipeline {
   #vad: EnergyVad;
   #chunker: SpeechChunker;
   #capture: CaptureLike | null = null;
+  #translator: Translator | null;
 
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
     this.#displayMs = deps.displayMs ?? 4000;
     this.#vad = new EnergyVad(deps.vadOptions);
     this.#chunker = new SpeechChunker(deps.chunkerOptions ?? { sampleRate: 16_000 });
+    this.#translator = deps.translator ?? null;
+  }
+
+  /** Swap the translator at runtime without touching capture or the ASR. */
+  setTranslator(translator: Translator | null): void {
+    this.#translator = translator;
   }
 
   async start(kind: CaptureKind): Promise<void> {
@@ -131,16 +138,27 @@ export class TranscriptionPipeline {
   async #handleChunk(chunk: Float32Array): Promise<void> {
     const startMs = this.#deps.nowMs();
     const timing = { startMs, endMs: startMs + this.#displayMs };
+
+    let cue: SubtitleCue | null;
     try {
-      const cue = await transcribeChunkToCue(chunk, timing, {
-        transcribe: (audio) => this.#deps.asr.transcribe(audio),
-        translate: this.#deps.translator
-          ? (text) => this.#deps.translator!.translate(text)
-          : undefined
+      cue = await transcribeChunkToCue(chunk, timing, {
+        transcribe: (audio) => this.#deps.asr.transcribe(audio)
       });
-      if (cue) this.#deps.track.commit(cue);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
+      return;
     }
+    if (!cue) return;
+
+    // Translation is best-effort: a failure surfaces as an error but never
+    // loses the transcription.
+    if (this.#translator) {
+      try {
+        cue.translation = await this.#translator.translate(cue.text);
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : String(err);
+      }
+    }
+    this.#deps.track.commit(cue);
   }
 }

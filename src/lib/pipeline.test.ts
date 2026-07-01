@@ -91,4 +91,76 @@ describe('TranscriptionPipeline', () => {
     await pipeline.start('microphone');
     expect(pipeline.backend).toBe('wasm');
   });
+
+  it('swaps the translator at runtime without restarting capture', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const deps: PipelineDeps = {
+      track,
+      nowMs: () => 0,
+      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
+      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
+      detect: async () => ({ supported: true }),
+      requestStream: async () => ({}) as MediaStream,
+      createCapture: capture.factory,
+      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => 'hola' }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    const loud = new Float32Array(3000).fill(0.5);
+    const quiet = new Float32Array(100);
+    const utterance = () => {
+      capture.frame(loud);
+      capture.frame(quiet); // hangover keeps it active
+      capture.frame(quiet); // hangover exhausted -> emit chunk
+    };
+
+    // No translator configured -> raw transcription.
+    utterance();
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(track.cues[0].translation).toBeUndefined();
+
+    pipeline.setTranslator({ translate: async (t) => `EN:${t}` });
+    utterance();
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    expect(track.cues[1].translation).toBe('EN:hola');
+
+    pipeline.setTranslator(null);
+    utterance();
+    await vi.waitFor(() => expect(track.cues.length).toBe(3));
+    expect(track.cues[2].translation).toBeUndefined();
+  });
+
+  it('commits the untranslated cue and surfaces the error when translation fails', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const deps: PipelineDeps = {
+      track,
+      nowMs: () => 0,
+      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
+      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
+      detect: async () => ({ supported: true }),
+      requestStream: async () => ({}) as MediaStream,
+      createCapture: capture.factory,
+      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => 'hola' },
+      translator: {
+        translate: async () => {
+          throw new Error('translate boom');
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    capture.frame(new Float32Array(3000).fill(0.5));
+    capture.frame(new Float32Array(100));
+    capture.frame(new Float32Array(100));
+
+    // Transcription must survive a translation failure.
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(track.cues[0].text).toBe('hola');
+    expect(track.cues[0].translation).toBeUndefined();
+    expect(pipeline.error).toContain('translate boom');
+  });
 });

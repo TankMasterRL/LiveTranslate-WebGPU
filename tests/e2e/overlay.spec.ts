@@ -44,6 +44,24 @@ test('overlays demo subtitles on top of the loaded player', async ({ page }) => 
   await page.screenshot({ path: 'test-results/overlay.png', fullPage: true });
 });
 
+test('translation panel exposes local and api modes', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /load video/i }).click();
+
+  const mode = page.getByLabel(/mode/i);
+  await expect(mode).toBeVisible();
+
+  await mode.selectOption('local');
+  await expect(page.getByLabel(/target language/i)).toBeVisible();
+  await expect(page.getByLabel(/source language/i)).toBeVisible();
+
+  await mode.selectOption('api');
+  await expect(page.getByLabel(/endpoint/i)).toBeVisible();
+  await expect(page.getByLabel(/api key/i)).toBeVisible();
+
+  await page.screenshot({ path: 'test-results/translate-panel.png', fullPage: true });
+});
+
 test('rejects input with no video id', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('textbox').fill('https://example.com/not-a-video');

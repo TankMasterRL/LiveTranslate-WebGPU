@@ -6,9 +6,17 @@
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
   import { makeCue } from '$lib/subtitles/cue';
   import { SubtitleTrack } from '$lib/subtitles/track.svelte';
+  import {
+    DEFAULT_TRANSLATION_SETTINGS,
+    createTranslator,
+    type TranslationSettings
+  } from '$lib/translate/factory';
+  import type { Translator } from '$lib/translate/translator';
+  import { WebGpuTranslator } from '$lib/translate/webgpu-translator';
   import Controls from '$lib/ui/Controls.svelte';
   import SubtitleOverlay from '$lib/ui/SubtitleOverlay.svelte';
   import TranscribePanel from '$lib/ui/TranscribePanel.svelte';
+  import TranslatePanel from '$lib/ui/TranslatePanel.svelte';
   import { DEFAULT_OVERLAY_SETTINGS, type OverlaySettings } from '$lib/ui/themes';
   import YouTubeEmbed from '$lib/youtube/YouTubeEmbed.svelte';
   import { YouTubePlayer } from '$lib/youtube/player.svelte';
@@ -26,6 +34,14 @@
   let captureKind = $state<CaptureKind>('tab');
   let pipeline = $state<TranscriptionPipeline | null>(null);
 
+  let translationSettings = $state<TranslationSettings>({
+    ...DEFAULT_TRANSLATION_SETTINGS,
+    api: { ...DEFAULT_TRANSLATION_SETTINGS.api }
+  });
+  let translateProgress = $state(0);
+  let translateError = $state<string | null>(null);
+  let translator = $state<Translator | null>(null);
+
   // The cue painted over the video, synced to playback time. Live cues are
   // stamped with the player clock and linger for a few seconds.
   const activeCue = $derived(track.activeAt(player.currentMs, 250) ?? null);
@@ -34,7 +50,29 @@
     webgpu = await detectWebGPU();
   });
 
-  onDestroy(() => pipeline?.stop());
+  onDestroy(() => {
+    pipeline?.stop();
+    if (translator instanceof WebGpuTranslator) translator.dispose();
+  });
+
+  function applyTranslation() {
+    translateError = null;
+    translateProgress = 0;
+    try {
+      const next = createTranslator(translationSettings, {
+        createLocal: (choice) => {
+          const local = new WebGpuTranslator(choice);
+          local.onProgress((fraction) => (translateProgress = fraction));
+          return local;
+        }
+      });
+      if (translator instanceof WebGpuTranslator) translator.dispose();
+      translator = next;
+      pipeline?.setTranslator(next);
+    } catch (err) {
+      translateError = err instanceof Error ? err.message : String(err);
+    }
+  }
 
   function loadVideo(input: string) {
     const id = parseVideoId(input);
@@ -55,6 +93,7 @@
       pipeline = new TranscriptionPipeline({
         track,
         asr,
+        translator: translator ?? undefined,
         nowMs: () => player.currentMs,
         displayMs: 5000,
         vadOptions: { threshold: 0.02, hangoverFrames: 12 },
@@ -115,6 +154,14 @@
       bind:captureKind
       onStart={startTranscription}
       onStop={stopTranscription}
+    />
+
+    <TranslatePanel
+      bind:settings={translationSettings}
+      progress={translateProgress}
+      error={translateError}
+      active={translator !== null}
+      onApply={applyTranslation}
     />
 
     <div class="stage-actions">
