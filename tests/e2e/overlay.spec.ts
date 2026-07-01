@@ -72,6 +72,27 @@ test('translation panel exposes local and api modes', async ({ page }) => {
   await page.screenshot({ path: 'test-results/translate-panel.png', fullPage: true });
 });
 
+test('silero vad loads in the browser without falling back', async ({ page }) => {
+  // Whisper weights are fetched from the Hugging Face hub, which this test
+  // environment can't reach — block them so the pipeline fails fast *after*
+  // the VAD stage. Silero is vendored locally, so it must load fine.
+  await page.route(/huggingface\.co/, (route) => route.abort());
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /load video/i }).click();
+  await page.getByLabel(/audio source/i).selectOption('microphone');
+  await page.getByLabel(/voice detection/i).selectOption('silero');
+  await page.getByRole('button', { name: /start transcription/i }).click();
+
+  // Wait for a terminal state: listening, or the expected Whisper load error.
+  await expect(
+    page.getByText(/listening — speak/i).or(page.getByRole('alert').filter({ hasText: /./ }))
+  ).toBeVisible({ timeout: 60_000 });
+
+  // The one failure that must NOT happen: the Silero ONNX session.
+  await expect(page.getByText(/silero vad failed/i)).not.toBeVisible();
+});
+
 test('rejects input with no video id', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('textbox').fill('https://example.com/not-a-video');

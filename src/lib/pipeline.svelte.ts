@@ -1,7 +1,7 @@
 import { AudioCapture } from './audio/capture';
 import { SpeechChunker, type SpeechChunkerOptions } from './audio/chunker';
 import { requestAudioStream, type CaptureKind } from './audio/source';
-import { EnergyVad, rms, type EnergyVadOptions } from './audio/vad';
+import { EnergyVad, rms, type EnergyVadOptions, type Vad } from './audio/vad';
 import { detectWebGPU, type WebGPUSupport } from './asr/webgpu';
 import { segmentsToCues } from './asr/align';
 import type { AsrResult } from './asr/transcript';
@@ -37,6 +37,8 @@ export interface PipelineDeps {
    * adapts to the displayed text's length (reading speed).
    */
   displayMs?: number;
+  /** VAD engine to use; defaults to an EnergyVad built from vadOptions. */
+  vad?: Vad;
   vadOptions?: EnergyVadOptions;
   chunkerOptions?: SpeechChunkerOptions;
   // Seams — overridden in tests, defaulted for the browser.
@@ -59,7 +61,7 @@ export class TranscriptionPipeline {
 
   readonly #deps: PipelineDeps;
   readonly #fixedDisplayMs: number | undefined;
-  #vad: EnergyVad;
+  #vad: Vad;
   #chunker: SpeechChunker;
   #capture: CaptureLike | null = null;
   #translator: Translator | null;
@@ -69,7 +71,7 @@ export class TranscriptionPipeline {
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
     this.#fixedDisplayMs = deps.displayMs;
-    this.#vad = new EnergyVad(deps.vadOptions);
+    this.#vad = deps.vad ?? new EnergyVad(deps.vadOptions);
     this.#chunker = new SpeechChunker(deps.chunkerOptions ?? { sampleRate: 16_000 });
     this.#translator = deps.translator ?? null;
     this.#sampleRate = deps.chunkerOptions?.sampleRate ?? 16_000;
@@ -78,6 +80,12 @@ export class TranscriptionPipeline {
   /** Swap the translator at runtime without touching capture or the ASR. */
   setTranslator(translator: Translator | null): void {
     this.#translator = translator;
+  }
+
+  /** Swap the VAD engine at runtime (e.g. energy ↔ Silero). */
+  setVad(vad: Vad): void {
+    this.#vad = vad;
+    this.#vad.reset();
   }
 
   async start(kind: CaptureKind): Promise<void> {

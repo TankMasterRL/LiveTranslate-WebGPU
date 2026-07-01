@@ -19,7 +19,11 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { executablePath: chromiumPath }
+        launchOptions: {
+          executablePath: chromiumPath,
+          // Fake mic so getUserMedia flows can run headless without prompts.
+          args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream']
+        }
       }
     }
   ],

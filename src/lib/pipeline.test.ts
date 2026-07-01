@@ -162,6 +162,31 @@ describe('TranscriptionPipeline', () => {
     expect(track.cues[1].endMs).toBe(7000);
   });
 
+  it('uses an injected VAD engine and can swap it at runtime', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const script = [true, true, false];
+    const vad1 = { process: vi.fn(() => script.shift() ?? false), reset: vi.fn() };
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      vad: vad1,
+      asr: asrOf(() => ({ text: 'hola' }))
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(vad1.process).toHaveBeenCalledTimes(3);
+
+    // A swapped-in VAD that never detects speech means no further cues.
+    const vad2 = { process: vi.fn(() => false), reset: vi.fn() };
+    pipeline.setVad(vad2);
+    utterance(capture);
+    expect(vad2.process).toHaveBeenCalledTimes(3);
+    expect(track.cues.length).toBe(1);
+  });
+
   it('commits the untranslated cue and surfaces the error when translation fails', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();

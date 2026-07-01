@@ -1,3 +1,12 @@
+/** A voice-activity detector: feed frames, get a speech/silence verdict. */
+export interface Vad {
+  process(frame: Float32Array): boolean;
+  reset(): void;
+}
+
+/** Selectable VAD engines in the UI. */
+export type VadEngineKind = 'energy' | 'silero';
+
 /** Root-mean-square amplitude of a frame (0 for an empty frame). */
 export function rms(frame: Float32Array): number {
   if (frame.length === 0) return 0;
@@ -18,7 +27,7 @@ export interface EnergyVadOptions {
  * the adaptive-silence idea in LiveTranslate's VAD. A Silero-ONNX VAD (e.g.
  * `@ricky0123/vad-web`) is a drop-in upgrade behind the same `process` shape.
  */
-export class EnergyVad {
+export class EnergyVad implements Vad {
   readonly #threshold: number;
   readonly #hangoverFrames: number;
   #countdown = 0;

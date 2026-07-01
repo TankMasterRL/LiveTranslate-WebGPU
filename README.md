@@ -16,7 +16,7 @@ The original desktop pipeline is reproduced with browser primitives:
 | LiveTranslate (desktop)      | This port (browser)                                   |
 | ---------------------------- | ----------------------------------------------------- |
 | WASAPI loopback (system audio) | `getDisplayMedia` tab/system audio · or microphone  |
-| Silero VAD                   | energy VAD with hangover (`src/lib/audio/vad.ts`)     |
+| Silero VAD                   | **Silero v5** (ONNX, vendored) or energy VAD (`src/lib/audio/`) |
 | faster-whisper ASR           | Whisper on **WebGPU** in a Web Worker (`src/lib/asr`) |
 | OpenAI-compatible LLM translate | local **WebGPU** model (opus-mt / NLLB-200) *or* OpenAI-compatible API |
 | PyQt transparent overlay     | positioned Svelte overlay on the YouTube embed        |
@@ -89,21 +89,40 @@ npm run build     # static SPA (adapter-static)
 
 ```
 src/lib/
-  subtitles/  cue model, active-cue selection, reactive SubtitleTrack store
-  audio/      capture (AudioWorklet), resample, framing, energy VAD, speech chunker
-  asr/        WebGPU detection, transcript cleanup, Whisper worker + client
+  subtitles/  cue model, active-cue selection, durations, reactive SubtitleTrack store
+  audio/      capture (AudioWorklet), resample, framing, speech chunker,
+              energy VAD + Silero v5 VAD (onnxruntime-web)
+  asr/        WebGPU detection, transcript cleanup, segment→cue alignment,
+              Whisper worker + client
   translate/  Translator seam: language/model selection, WebGPU translation
               worker + client, OpenAI-compatible adapter, settings factory
   youtube/    IFrame Player API wrapper, URL parsing, embed component
-  ui/         SubtitleOverlay, Controls, TranscribePanel, themes
+  ui/         SubtitleOverlay, Controls, TranscribePanel, TranslatePanel,
+              TranscriptList, themes
   pipeline.svelte.ts   reactive orchestrator wiring it all together
 ```
 
+## Voice detection
+
+Two engines in the **Live transcription** panel:
+
+- **Energy (simple)** — RMS threshold with a hangover tail; zero download, default.
+- **Silero (neural)** — the Silero VAD v5 ONNX model (vendored at
+  `static/models/silero_vad_v5.onnx`, ~2.3 MB, MIT) running on onnxruntime-web.
+  Much better at telling speech from music/noise. If it fails to load, the app
+  falls back to the energy VAD with a notice.
+
+Cue timestamps are real: utterance start is backdated by the captured chunk's
+duration, and Whisper's per-segment timestamps split long utterances into
+correctly-timed lines (the transcript panel shows true spans; the newest line
+stays on screen long enough to read).
+
 ## Roadmap
 
-- Silero-ONNX VAD as a drop-in upgrade for the energy VAD.
-- Per-cue timestamp alignment from Whisper chunk timestamps.
+- SRT/VTT export of the transcript.
+- Streaming partial cues while an utterance is still being spoken.
 
 ## Credits
 
 Ported from [TheDeathDragon/LiveTranslate](https://github.com/TheDeathDragon/LiveTranslate).
+Bundles the [Silero VAD](https://github.com/snakers4/silero-vad) v5 model (MIT).

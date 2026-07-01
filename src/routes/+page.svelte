@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import type { CaptureKind } from '$lib/audio/source';
+  import { EnergyVad, type Vad, type VadEngineKind } from '$lib/audio/vad';
   import { WhisperClient } from '$lib/asr/asr-client';
   import { detectWebGPU, type WebGPUSupport } from '$lib/asr/webgpu';
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
@@ -28,6 +29,7 @@
   const persisted = loadPersisted(SETTINGS_KEY, {
     videoInput: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     captureKind: 'tab' as CaptureKind,
+    vadEngine: 'energy' as VadEngineKind,
     overlay: DEFAULT_OVERLAY_SETTINGS,
     translation: DEFAULT_TRANSLATION_SETTINGS
   });
@@ -42,6 +44,7 @@
 
   let webgpu = $state<WebGPUSupport | null>(null);
   let captureKind = $state<CaptureKind>(persisted.captureKind);
+  let vadEngine = $state<VadEngineKind>(persisted.vadEngine);
   let pipeline = $state<TranscriptionPipeline | null>(null);
 
   let translationSettings = $state<TranslationSettings>(persisted.translation);
@@ -55,6 +58,7 @@
     savePersisted(SETTINGS_KEY, {
       videoInput,
       captureKind,
+      vadEngine,
       overlay: $state.snapshot(settings),
       translation: $state.snapshot(translationSettings)
     });
@@ -105,7 +109,30 @@
     videoId = id;
   }
 
+  const ENERGY_VAD_OPTIONS = { threshold: 0.02, hangoverFrames: 12 };
+
+  // Silero (neural) VAD is loaded lazily so onnxruntime-web stays out of the
+  // main bundle; any failure falls back to the energy VAD with a notice.
+  async function buildVad(): Promise<{ vad: Vad; notice: string | null }> {
+    if (vadEngine !== 'silero') return { vad: new EnergyVad(ENERGY_VAD_OPTIONS), notice: null };
+    try {
+      const [{ createSileroSession }, { SileroVad }] = await Promise.all([
+        import('$lib/audio/silero-session'),
+        import('$lib/audio/silero-vad')
+      ]);
+      const session = await createSileroSession();
+      return { vad: new SileroVad(session, { threshold: 0.5, hangoverFrames: 12 }), notice: null };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        vad: new EnergyVad(ENERGY_VAD_OPTIONS),
+        notice: `Silero VAD failed to load — using the energy VAD instead. (${detail})`
+      };
+    }
+  }
+
   async function startTranscription() {
+    const { vad, notice } = await buildVad();
     if (!pipeline) {
       const asr = new WhisperClient({ model: 'onnx-community/whisper-base' });
       pipeline = new TranscriptionPipeline({
@@ -113,11 +140,14 @@
         asr,
         translator: translator ?? undefined,
         nowMs: () => player.currentMs,
-        vadOptions: { threshold: 0.02, hangoverFrames: 12 },
+        vad,
         chunkerOptions: { sampleRate: 16_000, minSpeechMs: 400, maxDurationMs: 20_000 }
       });
+    } else {
+      pipeline.setVad(vad);
     }
     await pipeline.start(captureKind);
+    if (notice && !pipeline.notice) pipeline.notice = notice;
   }
 
   function stopTranscription() {
@@ -169,6 +199,7 @@
       {pipeline}
       {webgpu}
       bind:captureKind
+      bind:vadEngine
       onStart={startTranscription}
       onStop={stopTranscription}
     />

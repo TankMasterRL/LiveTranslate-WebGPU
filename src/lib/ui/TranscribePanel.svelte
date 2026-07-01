@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CaptureKind } from '$lib/audio/source';
+  import type { VadEngineKind } from '$lib/audio/vad';
   import type { WebGPUSupport } from '$lib/asr/webgpu';
   import type { TranscriptionPipeline } from '$lib/pipeline.svelte';
 
@@ -7,6 +8,7 @@
     pipeline: TranscriptionPipeline | null;
     webgpu: WebGPUSupport | null;
     captureKind: CaptureKind;
+    vadEngine: VadEngineKind;
     onStart: () => void;
     onStop: () => void;
   }
@@ -15,6 +17,7 @@
     pipeline,
     webgpu,
     captureKind = $bindable(),
+    vadEngine = $bindable(),
     onStart,
     onStop
   }: Props = $props();
@@ -46,6 +49,14 @@
       <select bind:value={captureKind} disabled={busy}>
         <option value="tab">Tab / system audio</option>
         <option value="microphone">Microphone</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Voice detection</span>
+      <select bind:value={vadEngine} disabled={busy}>
+        <option value="energy">Energy (simple)</option>
+        <option value="silero">Silero (neural)</option>
       </select>
     </label>
 
