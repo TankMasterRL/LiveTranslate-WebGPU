@@ -41,7 +41,17 @@ test('overlays demo subtitles on top of the loaded player', async ({ page }) => 
   await expect(line).toBeVisible();
   await expect(line).toContainText('rendered by SvelteKit');
 
+  // The demo cues also populate the transcript history panel.
+  await expect(page.getByTestId('transcript-list')).toBeVisible();
+
   await page.screenshot({ path: 'test-results/overlay.png', fullPage: true });
+});
+
+test('persists appearance settings across reloads', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel(/theme/i).selectOption('terminal');
+  await page.reload();
+  await expect(page.getByLabel(/theme/i)).toHaveValue('terminal');
 });
 
 test('translation panel exposes local and api modes', async ({ page }) => {

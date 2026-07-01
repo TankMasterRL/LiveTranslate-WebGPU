@@ -52,6 +52,10 @@ npm run dev            # http://localhost:5173
 3. **Start transcription**, pick *Tab / system audio* (share this tab **with audio**)
    or *Microphone*, and live subtitles appear over the video.
 
+Cues stay on screen for a reading-speed-based duration, a transcript panel below the
+player collects everything heard (with source text under translations), and your
+settings persist across visits via localStorage.
+
 ## Translation
 
 Three modes in the **Translation** panel (default: off, transcribe-only):
@@ -99,7 +103,6 @@ src/lib/
 
 - Silero-ONNX VAD as a drop-in upgrade for the energy VAD.
 - Per-cue timestamp alignment from Whisper chunk timestamps.
-- Persist settings (theme, translation config) across sessions.
 
 ## Credits
 

@@ -4,6 +4,7 @@
   import { WhisperClient } from '$lib/asr/asr-client';
   import { detectWebGPU, type WebGPUSupport } from '$lib/asr/webgpu';
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
+  import { loadPersisted, savePersisted } from '$lib/persist';
   import { makeCue } from '$lib/subtitles/cue';
   import { SubtitleTrack } from '$lib/subtitles/track.svelte';
   import {
@@ -16,31 +17,48 @@
   import Controls from '$lib/ui/Controls.svelte';
   import SubtitleOverlay from '$lib/ui/SubtitleOverlay.svelte';
   import TranscribePanel from '$lib/ui/TranscribePanel.svelte';
+  import TranscriptList from '$lib/ui/TranscriptList.svelte';
   import TranslatePanel from '$lib/ui/TranslatePanel.svelte';
   import { DEFAULT_OVERLAY_SETTINGS, type OverlaySettings } from '$lib/ui/themes';
   import YouTubeEmbed from '$lib/youtube/YouTubeEmbed.svelte';
   import { YouTubePlayer } from '$lib/youtube/player.svelte';
   import { parseVideoId } from '$lib/youtube/url';
 
-  let videoInput = $state('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  const SETTINGS_KEY = 'livetranslate-webgpu:settings';
+  const persisted = loadPersisted(SETTINGS_KEY, {
+    videoInput: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    captureKind: 'tab' as CaptureKind,
+    overlay: DEFAULT_OVERLAY_SETTINGS,
+    translation: DEFAULT_TRANSLATION_SETTINGS
+  });
+
+  let videoInput = $state(persisted.videoInput);
   let videoId = $state<string | null>(null);
   let error = $state<string | null>(null);
-  let settings = $state<OverlaySettings>({ ...DEFAULT_OVERLAY_SETTINGS });
+  let settings = $state<OverlaySettings>(persisted.overlay);
 
   let player = $state(new YouTubePlayer());
   const track = new SubtitleTrack();
 
   let webgpu = $state<WebGPUSupport | null>(null);
-  let captureKind = $state<CaptureKind>('tab');
+  let captureKind = $state<CaptureKind>(persisted.captureKind);
   let pipeline = $state<TranscriptionPipeline | null>(null);
 
-  let translationSettings = $state<TranslationSettings>({
-    ...DEFAULT_TRANSLATION_SETTINGS,
-    api: { ...DEFAULT_TRANSLATION_SETTINGS.api }
-  });
+  let translationSettings = $state<TranslationSettings>(persisted.translation);
   let translateProgress = $state(0);
   let translateError = $state<string | null>(null);
   let translator = $state<Translator | null>(null);
+
+  // Persist preferences on any change ($state.snapshot reads deeply, so this
+  // effect tracks nested edits like translationSettings.api.apiKey).
+  $effect(() => {
+    savePersisted(SETTINGS_KEY, {
+      videoInput,
+      captureKind,
+      overlay: $state.snapshot(settings),
+      translation: $state.snapshot(translationSettings)
+    });
+  });
 
   // The cue painted over the video, synced to playback time. Live cues are
   // stamped with the player clock and linger for a few seconds.
@@ -95,7 +113,6 @@
         asr,
         translator: translator ?? undefined,
         nowMs: () => player.currentMs,
-        displayMs: 5000,
         vadOptions: { threshold: 0.02, hangoverFrames: 12 },
         chunkerOptions: { sampleRate: 16_000, minSpeechMs: 400, maxDurationMs: 20_000 }
       });
@@ -168,6 +185,10 @@
       <button type="button" onclick={loadDemoSubtitles}>Preview subtitle overlay</button>
       <span class="hint">Seeds demo cues so you can see the overlay without capturing audio.</span>
     </div>
+
+    {#if track.cues.length > 0}
+      <TranscriptList cues={track.cues} />
+    {/if}
   {:else}
     <p class="empty">Load a YouTube video to begin.</p>
   {/if}

@@ -4,7 +4,8 @@ import { requestAudioStream, type CaptureKind } from './audio/source';
 import { EnergyVad, rms, type EnergyVadOptions } from './audio/vad';
 import { detectWebGPU, type WebGPUSupport } from './asr/webgpu';
 import { cleanTranscript } from './asr/transcript';
-import { makeCue, type SubtitleCue } from './subtitles/cue';
+import { displayText, makeCue, type SubtitleCue } from './subtitles/cue';
+import { cueDisplayMs } from './subtitles/duration';
 import type { SubtitleTrack } from './subtitles/track.svelte';
 import type { Translator } from './translate/translator';
 
@@ -30,7 +31,10 @@ export interface PipelineDeps {
   translator?: Translator;
   /** Playback clock used to timestamp cues (e.g. () => player.currentMs). */
   nowMs: () => number;
-  /** How long a finalized cue stays on screen. */
+  /**
+   * Fixed on-screen duration override for cues. When omitted, the duration
+   * adapts to the displayed text's length (reading speed).
+   */
   displayMs?: number;
   vadOptions?: EnergyVadOptions;
   chunkerOptions?: SpeechChunkerOptions;
@@ -71,7 +75,7 @@ export class TranscriptionPipeline {
   notice = $state<string | null>(null);
 
   readonly #deps: PipelineDeps;
-  readonly #displayMs: number;
+  readonly #fixedDisplayMs: number | undefined;
   #vad: EnergyVad;
   #chunker: SpeechChunker;
   #capture: CaptureLike | null = null;
@@ -79,7 +83,7 @@ export class TranscriptionPipeline {
 
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
-    this.#displayMs = deps.displayMs ?? 4000;
+    this.#fixedDisplayMs = deps.displayMs;
     this.#vad = new EnergyVad(deps.vadOptions);
     this.#chunker = new SpeechChunker(deps.chunkerOptions ?? { sampleRate: 16_000 });
     this.#translator = deps.translator ?? null;
@@ -137,7 +141,7 @@ export class TranscriptionPipeline {
 
   async #handleChunk(chunk: Float32Array): Promise<void> {
     const startMs = this.#deps.nowMs();
-    const timing = { startMs, endMs: startMs + this.#displayMs };
+    const timing = { startMs, endMs: startMs + (this.#fixedDisplayMs ?? 0) };
 
     let cue: SubtitleCue | null;
     try {
@@ -158,6 +162,11 @@ export class TranscriptionPipeline {
       } catch (err) {
         this.error = err instanceof Error ? err.message : String(err);
       }
+    }
+    // Without a fixed override, on-screen time adapts to what will be shown
+    // (the translation when present) — set after translating for that reason.
+    if (this.#fixedDisplayMs === undefined) {
+      cue.endMs = startMs + cueDisplayMs(displayText(cue));
     }
     this.#deps.track.commit(cue);
   }

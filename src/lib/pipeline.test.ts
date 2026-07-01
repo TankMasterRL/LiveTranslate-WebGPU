@@ -132,6 +132,39 @@ describe('TranscriptionPipeline', () => {
     expect(track.cues[2].translation).toBeUndefined();
   });
 
+  it('adapts cue duration to text length when no fixed displayMs is set', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let response = 'hi';
+    const deps: PipelineDeps = {
+      track,
+      nowMs: () => 0,
+      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
+      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
+      detect: async () => ({ supported: true }),
+      requestStream: async () => ({}) as MediaStream,
+      createCapture: capture.factory,
+      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => response }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    const utterance = () => {
+      capture.frame(new Float32Array(3000).fill(0.5));
+      capture.frame(new Float32Array(100));
+      capture.frame(new Float32Array(100));
+    };
+
+    utterance(); // short text -> clamped to the minimum display time
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(track.cues[0].endMs - track.cues[0].startMs).toBe(1800);
+
+    response = 'a'.repeat(500);
+    utterance(); // long text -> clamped to the maximum
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    expect(track.cues[1].endMs - track.cues[1].startMs).toBe(7000);
+  });
+
   it('commits the untranslated cue and surfaces the error when translation fails', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();
