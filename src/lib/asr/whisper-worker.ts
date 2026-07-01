@@ -38,12 +38,23 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
       if (!transcriber) throw new Error('Whisper model is not loaded yet.');
       const output = await transcriber(message.audio, {
         language: message.language,
-        task: 'transcribe'
+        task: 'transcribe',
+        return_timestamps: true
       });
-      const text = Array.isArray(output)
-        ? output.map((o: { text?: string }) => o.text ?? '').join(' ')
-        : (output.text ?? '');
-      ctx.postMessage({ type: 'result', id: message.id, text });
+      // Single audio input -> single result object (arrays only appear for batches).
+      const item = Array.isArray(output) ? output[0] : output;
+      const text: string = item?.text ?? '';
+      const toMs = (seconds: number | null | undefined) =>
+        seconds == null ? null : Math.round(seconds * 1000);
+      const segments = ((item?.chunks ?? []) as Array<{
+        text?: string;
+        timestamp?: [number | null, number | null];
+      }>).map((chunk) => ({
+        text: chunk.text ?? '',
+        startMs: toMs(chunk.timestamp?.[0]),
+        endMs: toMs(chunk.timestamp?.[1])
+      }));
+      ctx.postMessage({ type: 'result', id: message.id, text, segments });
     }
   } catch (err) {
     ctx.postMessage({

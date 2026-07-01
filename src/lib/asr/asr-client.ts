@@ -1,4 +1,5 @@
 import type { AsrBackend, AsrEngine } from '../pipeline.svelte';
+import type { AsrResult, AsrSegment } from './transcript';
 
 export interface WhisperClientOptions {
   /** Hugging Face model id. Defaults to a multilingual whisper-base. */
@@ -10,7 +11,7 @@ export interface WhisperClientOptions {
 type OutboundMessage =
   | { type: 'progress'; info: { progress?: number; status?: string } }
   | { type: 'ready' }
-  | { type: 'result'; id: number; text: string }
+  | { type: 'result'; id: number; text: string; segments?: AsrSegment[] }
   | { type: 'error'; id?: number; message: string };
 
 /**
@@ -22,7 +23,7 @@ export class WhisperClient implements AsrEngine {
   readonly #model?: string;
   readonly #language?: string;
   #seq = 0;
-  #pending = new Map<number, { resolve: (text: string) => void; reject: (e: Error) => void }>();
+  #pending = new Map<number, { resolve: (result: AsrResult) => void; reject: (e: Error) => void }>();
   #readyResolvers: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
   #progress?: (fraction: number) => void;
 
@@ -44,7 +45,7 @@ export class WhisperClient implements AsrEngine {
     });
   }
 
-  transcribe(audio: Float32Array): Promise<string> {
+  transcribe(audio: Float32Array): Promise<AsrResult> {
     const id = ++this.#seq;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -69,7 +70,7 @@ export class WhisperClient implements AsrEngine {
         this.#readyResolvers.shift()?.resolve();
         break;
       case 'result':
-        this.#pending.get(message.id)?.resolve(message.text);
+        this.#pending.get(message.id)?.resolve({ text: message.text, segments: message.segments });
         this.#pending.delete(message.id);
         break;
       case 'error':

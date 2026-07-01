@@ -3,8 +3,9 @@ import { SpeechChunker, type SpeechChunkerOptions } from './audio/chunker';
 import { requestAudioStream, type CaptureKind } from './audio/source';
 import { EnergyVad, rms, type EnergyVadOptions } from './audio/vad';
 import { detectWebGPU, type WebGPUSupport } from './asr/webgpu';
-import { cleanTranscript } from './asr/transcript';
-import { displayText, makeCue, type SubtitleCue } from './subtitles/cue';
+import { segmentsToCues } from './asr/align';
+import type { AsrResult } from './asr/transcript';
+import { displayText } from './subtitles/cue';
 import { cueDisplayMs } from './subtitles/duration';
 import type { SubtitleTrack } from './subtitles/track.svelte';
 import type { Translator } from './translate/translator';
@@ -15,7 +16,7 @@ export type AsrBackend = 'webgpu' | 'wasm';
 /** The ASR seam the pipeline drives (implemented by the Whisper worker client). */
 export interface AsrEngine {
   load(backend: AsrBackend): Promise<void>;
-  transcribe(audio: Float32Array): Promise<string>;
+  transcribe(audio: Float32Array): Promise<AsrResult>;
   onProgress?(callback: (fraction: number) => void): void;
   dispose?(): void;
 }
@@ -45,24 +46,6 @@ export interface PipelineDeps {
 }
 
 /**
- * Turn one audio chunk into a cue: transcribe → clean → optionally translate.
- * Returns null when the transcript is blank. Pure (deps injected) and tested.
- */
-export async function transcribeChunkToCue(
-  chunk: Float32Array,
-  timing: { startMs: number; endMs: number },
-  deps: {
-    transcribe: (audio: Float32Array) => Promise<string>;
-    translate?: (text: string) => Promise<string>;
-  }
-): Promise<SubtitleCue | null> {
-  const text = cleanTranscript(await deps.transcribe(chunk));
-  if (!text) return null;
-  const translation = deps.translate ? await deps.translate(text) : undefined;
-  return makeCue({ text, translation, startMs: timing.startMs, endMs: timing.endMs });
-}
-
-/**
  * Reactive orchestrator wiring capture → VAD → chunker → Whisper → translator →
  * subtitle track. This is the browser port of LiveTranslate's pipeline loop.
  */
@@ -81,12 +64,15 @@ export class TranscriptionPipeline {
   #capture: CaptureLike | null = null;
   #translator: Translator | null;
 
+  readonly #sampleRate: number;
+
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
     this.#fixedDisplayMs = deps.displayMs;
     this.#vad = new EnergyVad(deps.vadOptions);
     this.#chunker = new SpeechChunker(deps.chunkerOptions ?? { sampleRate: 16_000 });
     this.#translator = deps.translator ?? null;
+    this.#sampleRate = deps.chunkerOptions?.sampleRate ?? 16_000;
   }
 
   /** Swap the translator at runtime without touching capture or the ASR. */
@@ -140,34 +126,46 @@ export class TranscriptionPipeline {
   }
 
   async #handleChunk(chunk: Float32Array): Promise<void> {
-    const startMs = this.#deps.nowMs();
-    const timing = { startMs, endMs: startMs + (this.#fixedDisplayMs ?? 0) };
+    // The chunk was captured over the preceding durationMs, so the utterance
+    // began that far before "now" on the media timeline.
+    const emissionMs = this.#deps.nowMs();
+    const durationMs = Math.round((chunk.length / this.#sampleRate) * 1000);
 
-    let cue: SubtitleCue | null;
+    let result: AsrResult;
     try {
-      cue = await transcribeChunkToCue(chunk, timing, {
-        transcribe: (audio) => this.#deps.asr.transcribe(audio)
-      });
+      result = await this.#deps.asr.transcribe(chunk);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
       return;
     }
-    if (!cue) return;
+
+    const cues = segmentsToCues(result, {
+      utteranceStartMs: emissionMs - durationMs,
+      utteranceDurationMs: durationMs
+    });
+    if (cues.length === 0) return;
 
     // Translation is best-effort: a failure surfaces as an error but never
     // loses the transcription.
     if (this.#translator) {
-      try {
-        cue.translation = await this.#translator.translate(cue.text);
-      } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
+      for (const cue of cues) {
+        try {
+          cue.translation = await this.#translator.translate(cue.text);
+        } catch (err) {
+          this.error = err instanceof Error ? err.message : String(err);
+        }
       }
     }
-    // Without a fixed override, on-screen time adapts to what will be shown
-    // (the translation when present) — set after translating for that reason.
-    if (this.#fixedDisplayMs === undefined) {
-      cue.endMs = startMs + cueDisplayMs(displayText(cue));
-    }
-    this.#deps.track.commit(cue);
+
+    // Earlier segments keep their true (past) spans for the transcript; the
+    // last one also stays on screen long enough to read — sized by what is
+    // actually shown (the translation when present).
+    const last = cues[cues.length - 1];
+    last.endMs =
+      this.#fixedDisplayMs !== undefined
+        ? emissionMs + this.#fixedDisplayMs
+        : Math.max(last.endMs, emissionMs + cueDisplayMs(displayText(last)));
+
+    for (const cue of cues) this.#deps.track.commit(cue);
   }
 }

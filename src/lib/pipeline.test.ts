@@ -1,33 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AsrResult } from './asr/transcript';
 import { SubtitleTrack } from './subtitles/track.svelte';
-import { TranscriptionPipeline, transcribeChunkToCue, type PipelineDeps } from './pipeline.svelte';
-
-describe('transcribeChunkToCue', () => {
-  it('cleans the transcript and builds a cue with timing', async () => {
-    const cue = await transcribeChunkToCue(new Float32Array(10), { startMs: 1000, endMs: 5000 }, {
-      transcribe: async () => '<|0.00|> hola mundo'
-    });
-    expect(cue).not.toBeNull();
-    expect(cue!.text).toBe('hola mundo');
-    expect(cue!.startMs).toBe(1000);
-    expect(cue!.endMs).toBe(5000);
-  });
-
-  it('applies the translator when provided', async () => {
-    const cue = await transcribeChunkToCue(new Float32Array(10), { startMs: 0, endMs: 1 }, {
-      transcribe: async () => 'hola',
-      translate: async (t) => `EN:${t}`
-    });
-    expect(cue!.translation).toBe('EN:hola');
-  });
-
-  it('returns null for a blank transcript', async () => {
-    const cue = await transcribeChunkToCue(new Float32Array(10), { startMs: 0, endMs: 1 }, {
-      transcribe: async () => '<|endoftext|>'
-    });
-    expect(cue).toBeNull();
-  });
-});
+import { TranscriptionPipeline, type PipelineDeps } from './pipeline.svelte';
 
 // A fake AudioCapture whose onFrame callback the test can drive directly.
 function makeFakeCapture() {
@@ -35,28 +9,52 @@ function makeFakeCapture() {
   return {
     factory: (cb: (f: Float32Array) => void) => {
       onFrame = cb;
-      return { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined) };
+      return {
+        start: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined)
+      };
     },
     frame: (f: Float32Array) => onFrame(f)
   };
 }
 
+const asrOf = (fn: () => AsrResult) => ({
+  load: vi.fn().mockResolvedValue(undefined),
+  transcribe: async () => fn()
+});
+
+function baseDeps(track: SubtitleTrack, capture: ReturnType<typeof makeFakeCapture>) {
+  return {
+    track,
+    nowMs: () => 0,
+    vadOptions: { threshold: 0.1, hangoverFrames: 1 },
+    chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
+    detect: async () => ({ supported: true }),
+    requestStream: async () => ({}) as MediaStream,
+    createCapture: capture.factory
+  };
+}
+
+// loud(3000) + quiet(100, hangover) form a 3100-sample chunk = 194ms @16k.
+const CHUNK_MS = Math.round((3100 / 16_000) * 1000);
+
+function utterance(capture: ReturnType<typeof makeFakeCapture>) {
+  capture.frame(new Float32Array(3000).fill(0.5));
+  capture.frame(new Float32Array(100)); // hangover keeps it active
+  capture.frame(new Float32Array(100)); // hangover exhausted -> emit chunk
+}
+
 describe('TranscriptionPipeline', () => {
-  it('captures voiced audio and commits a transcribed, translated cue', async () => {
+  it('captures voiced audio and commits a transcribed, translated cue backdated to the utterance start', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();
-    let clock = 10_000;
+    const clock = 10_000;
 
     const deps: PipelineDeps = {
-      track,
+      ...baseDeps(track, capture),
       nowMs: () => clock,
       displayMs: 4000,
-      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
-      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
-      detect: async () => ({ supported: true }),
-      requestStream: async () => ({}) as MediaStream,
-      createCapture: capture.factory,
-      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => 'hola' },
+      asr: asrOf(() => ({ text: 'hola' })),
       translator: { translate: async (t) => `EN:${t}` }
     };
 
@@ -65,69 +63,79 @@ describe('TranscriptionPipeline', () => {
     expect(pipeline.status).toBe('listening');
     expect(pipeline.backend).toBe('webgpu');
 
-    const loud = new Float32Array(3000).fill(0.5);
-    const quiet = new Float32Array(100);
-    capture.frame(loud); // voiced, collecting
-    capture.frame(quiet); // hangover keeps it active
-    capture.frame(quiet); // hangover exhausted -> emit chunk
+    utterance(capture);
 
     await vi.waitFor(() => expect(track.cues.length).toBe(1));
     expect(track.cues[0].text).toBe('hola');
     expect(track.cues[0].translation).toBe('EN:hola');
-    expect(track.cues[0].startMs).toBe(10_000);
-    expect(track.cues[0].endMs).toBe(14_000);
+    // The cue starts when the speech started, not when the chunk was emitted.
+    expect(track.cues[0].startMs).toBe(clock - CHUNK_MS);
+    expect(track.cues[0].endMs).toBe(clock + 4000);
   });
 
   it('falls back to the wasm backend when WebGPU is unavailable', async () => {
+    const capture = makeFakeCapture();
     const deps: PipelineDeps = {
-      track: new SubtitleTrack(),
-      nowMs: () => 0,
+      ...baseDeps(new SubtitleTrack(), capture),
       detect: async () => ({ supported: false, reason: 'no gpu' }),
-      requestStream: async () => ({}) as MediaStream,
-      createCapture: makeFakeCapture().factory,
-      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => '' }
+      asr: asrOf(() => ({ text: '' }))
     };
     const pipeline = new TranscriptionPipeline(deps);
     await pipeline.start('microphone');
     expect(pipeline.backend).toBe('wasm');
   });
 
-  it('swaps the translator at runtime without restarting capture', async () => {
+  it('splits a multi-segment result into true-timed cues, extending the last for display', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();
+    const clock = 10_000;
+
     const deps: PipelineDeps = {
-      track,
-      nowMs: () => 0,
-      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
-      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
-      detect: async () => ({ supported: true }),
-      requestStream: async () => ({}) as MediaStream,
-      createCapture: capture.factory,
-      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => 'hola' }
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      asr: asrOf(() => ({
+        text: ' one two',
+        segments: [
+          { text: ' one', startMs: 0, endMs: 100 },
+          { text: ' two', startMs: 100, endMs: null }
+        ]
+      }))
     };
     const pipeline = new TranscriptionPipeline(deps);
     await pipeline.start('microphone');
 
-    const loud = new Float32Array(3000).fill(0.5);
-    const quiet = new Float32Array(100);
-    const utterance = () => {
-      capture.frame(loud);
-      capture.frame(quiet); // hangover keeps it active
-      capture.frame(quiet); // hangover exhausted -> emit chunk
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    const start = clock - CHUNK_MS;
+    expect(track.cues[0]).toMatchObject({ text: 'one', startMs: start, endMs: start + 100 });
+    // Last cue keeps its true start but stays on screen for reading time.
+    expect(track.cues[1].startMs).toBe(start + 100);
+    expect(track.cues[1].endMs).toBe(clock + 1800);
+  });
+
+  it('swaps the translator at runtime without restarting capture', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      asr: asrOf(() => ({ text: 'hola' }))
     };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
 
     // No translator configured -> raw transcription.
-    utterance();
+    utterance(capture);
     await vi.waitFor(() => expect(track.cues.length).toBe(1));
     expect(track.cues[0].translation).toBeUndefined();
 
     pipeline.setTranslator({ translate: async (t) => `EN:${t}` });
-    utterance();
+    utterance(capture);
     await vi.waitFor(() => expect(track.cues.length).toBe(2));
     expect(track.cues[1].translation).toBe('EN:hola');
 
     pipeline.setTranslator(null);
-    utterance();
+    utterance(capture);
     await vi.waitFor(() => expect(track.cues.length).toBe(3));
     expect(track.cues[2].translation).toBeUndefined();
   });
@@ -137,46 +145,29 @@ describe('TranscriptionPipeline', () => {
     const capture = makeFakeCapture();
     let response = 'hi';
     const deps: PipelineDeps = {
-      track,
-      nowMs: () => 0,
-      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
-      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
-      detect: async () => ({ supported: true }),
-      requestStream: async () => ({}) as MediaStream,
-      createCapture: capture.factory,
-      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => response }
+      ...baseDeps(track, capture),
+      asr: asrOf(() => ({ text: response }))
     };
     const pipeline = new TranscriptionPipeline(deps);
     await pipeline.start('microphone');
 
-    const utterance = () => {
-      capture.frame(new Float32Array(3000).fill(0.5));
-      capture.frame(new Float32Array(100));
-      capture.frame(new Float32Array(100));
-    };
-
-    utterance(); // short text -> clamped to the minimum display time
+    utterance(capture); // short text -> clamped to the minimum display time
     await vi.waitFor(() => expect(track.cues.length).toBe(1));
-    expect(track.cues[0].endMs - track.cues[0].startMs).toBe(1800);
+    expect(track.cues[0].startMs).toBe(-CHUNK_MS);
+    expect(track.cues[0].endMs).toBe(1800);
 
     response = 'a'.repeat(500);
-    utterance(); // long text -> clamped to the maximum
+    utterance(capture); // long text -> clamped to the maximum
     await vi.waitFor(() => expect(track.cues.length).toBe(2));
-    expect(track.cues[1].endMs - track.cues[1].startMs).toBe(7000);
+    expect(track.cues[1].endMs).toBe(7000);
   });
 
   it('commits the untranslated cue and surfaces the error when translation fails', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();
     const deps: PipelineDeps = {
-      track,
-      nowMs: () => 0,
-      vadOptions: { threshold: 0.1, hangoverFrames: 1 },
-      chunkerOptions: { sampleRate: 16_000, minSpeechMs: 100 },
-      detect: async () => ({ supported: true }),
-      requestStream: async () => ({}) as MediaStream,
-      createCapture: capture.factory,
-      asr: { load: vi.fn().mockResolvedValue(undefined), transcribe: async () => 'hola' },
+      ...baseDeps(track, capture),
+      asr: asrOf(() => ({ text: 'hola' })),
       translator: {
         translate: async () => {
           throw new Error('translate boom');
@@ -186,9 +177,7 @@ describe('TranscriptionPipeline', () => {
     const pipeline = new TranscriptionPipeline(deps);
     await pipeline.start('microphone');
 
-    capture.frame(new Float32Array(3000).fill(0.5));
-    capture.frame(new Float32Array(100));
-    capture.frame(new Float32Array(100));
+    utterance(capture);
 
     // Transcription must survive a translation failure.
     await vi.waitFor(() => expect(track.cues.length).toBe(1));

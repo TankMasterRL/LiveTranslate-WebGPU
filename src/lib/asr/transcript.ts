@@ -1,3 +1,17 @@
+/** One Whisper segment with times relative to the transcribed chunk's start. */
+export interface AsrSegment {
+  text: string;
+  startMs: number | null;
+  /** Whisper sometimes leaves the final segment's end open. */
+  endMs: number | null;
+}
+
+/** Output of one ASR run over an utterance chunk. */
+export interface AsrResult {
+  text: string;
+  segments?: AsrSegment[];
+}
+
 // Whisper special/timestamp tokens, e.g. <|startoftranscript|>, <|en|>, <|0.00|>.
 const SPECIAL_TOKEN = /<\|[^|]*\|>/g;
 
