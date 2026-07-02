@@ -1,0 +1,70 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+npm run dev           # dev server (http://localhost:5173)
+npm test              # all Vitest unit/component tests, one pass
+npm run test:unit     # Vitest in watch mode
+npx vitest run src/lib/audio/vad.test.ts        # single test file
+npx vitest run -t "hangover"                    # tests matching a name
+npm run test:e2e      # Playwright (auto-builds and serves on :4173)
+npm run check         # svelte-kit sync + svelte-check (type-check .svelte + .ts)
+npm run build         # static SPA build (adapter-static, output in build/)
+npm run format        # prettier
+```
+
+- Vitest picks up `src/**/*.{test,spec}.ts` (jsdom, globals on, setup in `vitest-setup.ts`); Playwright specs live in `tests/e2e/` and are excluded from Vitest.
+- The Silero integration test (`src/lib/audio/silero-session.integration.test.ts`) runs the **real ONNX model** vendored at `static/models/silero_vad_v5.onnx`; it runs under `@vitest-environment node` and skips itself if the model file is missing (`SILERO_MODEL_PATH` overrides the path).
+- Playwright uses a preinstalled Chromium at `/opt/pw-browsers/chromium` (`PLAYWRIGHT_CHROMIUM_PATH` overrides). Do not run `playwright install`.
+
+## What this is
+
+A browser-native port of LiveTranslate (Windows/PyQt6 real-time audio translator): live subtitles overlaid on embedded YouTube videos, with Whisper ASR and optional translation running client-side on WebGPU via transformers.js / onnxruntime-web. Fully static SPA — `ssr = false`, prerendered shell, no server code.
+
+## Architecture: the pipeline
+
+Everything hangs off one dataflow, orchestrated by `TranscriptionPipeline` in `src/lib/pipeline.svelte.ts`:
+
+```
+MediaStream (getDisplayMedia tab audio | mic)        src/lib/audio/source.ts
+  → AudioWorklet → mono 16kHz, 512-sample frames     src/lib/audio/{capture.ts,pcm-worklet.js,resample.ts,frames.ts}
+  → Vad (EnergyVad | SileroVad)                      src/lib/audio/{vad.ts,silero-vad.ts,silero-session.ts}
+  → SpeechChunker (utterance chunks)                 src/lib/audio/chunker.ts
+  → Whisper Web Worker (WebGPU, WASM fallback)       src/lib/asr/{whisper-worker.ts,asr-client.ts,webgpu.ts}
+  → segmentsToCues (true timestamps)                 src/lib/asr/align.ts
+  → Translator (optional, swappable at runtime)      src/lib/translate/*
+  → SubtitleTrack (runes store)                      src/lib/subtitles/track.svelte.ts
+  → SubtitleOverlay, synced to player.currentMs      src/lib/ui/SubtitleOverlay.svelte, src/lib/youtube/player.svelte.ts
+```
+
+**Every pipeline dependency is an injected seam** (`PipelineDeps`: `detect`, `requestStream`, `createCapture`, `asr`, `translator`, `vad`) with browser defaults. Tests construct the pipeline with fakes and drive PCM frames directly — see `src/lib/pipeline.test.ts` for the pattern. Preserve this: new integrations get a seam + a fake, not a mock of the browser API.
+
+### The worker pattern (used twice, keep them mirrored)
+
+`asr/whisper-worker.ts`↔`asr/asr-client.ts` and `translate/translate-worker.ts`↔`translate/webgpu-translator.ts` share a postMessage protocol: `load` / work message with `id` / `progress` / `ready` / `result` / `error`. Clients match results to promises by id. **Load failures must reject the pending `load()` promise** (an `error` message with no `id`) — a silent hang here was a real bug once already.
+
+### Reactivity model
+
+Svelte 5 runes classes live in `.svelte.ts` files (`SubtitleTrack`, `YouTubePlayer`, `TranscriptionPipeline`) exposing `$state` fields behind getters; they are unit-testable in Vitest directly. Components use `$props()`/`$bindable()`/`$derived`. The page persists settings via one `$effect` calling `savePersisted` with `$state.snapshot`.
+
+### Timing semantics (subtle, tested)
+
+Cue timestamps are on the *media timeline* (`player.currentMs`). An utterance chunk emitted "now" is **backdated** by its audio duration; Whisper segments (from `return_timestamps`) become individual true-timed cues; only the **last** cue of an utterance gets its `endMs` extended to reading time (`cueDisplayMs`, ~70ms/char clamped 1.8–7s, computed from the *displayed* text — the translation if present). `SileroVad.process()` is synchronous by returning the previous frame's decision while queueing async inference (one 32ms frame of lag, absorbed by the hangover).
+
+## Hard constraints (these explain non-obvious code)
+
+- **A cross-origin YouTube iframe's audio cannot be read.** Transcription requires sharing tab/system audio (`getDisplayMedia`, WASAPI-loopback analog) or the mic. Don't try to tap the embed.
+- **No COOP/COEP headers, ever** — cross-origin isolation would break the YouTube embed. Consequence: no SharedArrayBuffer, so WASM paths are single-threaded (`ort.env.wasm.numThreads = 1` in `silero-session.ts`).
+- **The overlay never touches the iframe's DOM.** It is a sibling absolutely positioned over the player; time comes from the IFrame Player API polled via rAF (`youtube/player.svelte.ts`).
+- **No GPU in CI/headless.** Real Whisper/translation inference is manual-verification only (steps in README). Tests cover pure logic with fakes; the vendored Silero model is the one real-model automated test; a Playwright test verifies ort-web + the vendored model load in the built app by blocking huggingface.co and asserting the fallback notice does not appear.
+- Whisper and translation model weights download from the Hugging Face hub at runtime (browser-cached). Silero (~2.3MB, MIT) is vendored in `static/models/` deliberately.
+
+## Conventions
+
+- **Red/green TDD**: write the failing test first. Pure logic gets Vitest units; components get @testing-library/svelte tests; AudioContext/Worker wiring is covered by e2e + manual verification rather than mocked unit tests.
+- E2e determinism: the YouTube IFrame API is stubbed via `page.route('**/iframe_api', …)` in `tests/e2e/overlay.spec.ts`; Chromium runs with fake media-device flags (see `playwright.config.ts`).
+- Persisted settings use `loadPersisted` (`src/lib/persist.ts`), which type-checks and deep-merges stored values over defaults — to persist a new setting, add it to the defaults object in `src/routes/+page.svelte`; stale/corrupt stored shapes degrade to defaults automatically.
+- Adding a translation language: extend `LANGUAGES` in `src/lib/translate/lang.ts` (needs the NLLB FLORES code); `chooseLocalModel` decides fast-opus-mt (auto→en) vs NLLB (explicit source required).
