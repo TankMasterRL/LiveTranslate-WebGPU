@@ -166,5 +166,10 @@ declines them.
    commit title as the final imperative subject; put the body detail
    in the squash commit message. The `Assisted-by:` trailer must
    appear in the squash message.
-8. **Clean up.** Delete any local worktree branches that are no
-   longer needed after the squash-merge lands.
+8. **Clean up.** Once a PR has been merged, **all branches belonging
+   or previously belonging to that PR must be removed** — the PR's
+   head branch on the remote (`git push origin --delete <branch>`),
+   its local counterpart and any local worktree branches, and any
+   superseded branches from earlier iterations of the same PR (e.g.
+   after a rename or retarget). A merged PR must leave no stale
+   branches behind.
