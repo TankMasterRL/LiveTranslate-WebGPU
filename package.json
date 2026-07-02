@@ -13,6 +13,7 @@
     "test:unit": "vitest",
     "test:e2e": "playwright test",
     "test:docker": "docker build -f Dockerfile.test -t livetranslate-tests . && docker run --rm --ipc=host livetranslate-tests",
+    "screenshot": "npm run build && node scripts/readme-screenshot.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
