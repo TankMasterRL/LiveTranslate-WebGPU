@@ -1,9 +1,12 @@
 name: CI
 
+# PR branches run once via pull_request; direct pushes to the mainline run via
+# push (previously `push: ['**']` + pull_request double-ran every PR commit).
 on:
   push:
-    branches: ['**']
+    branches: [main, baseline]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -11,26 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+      # The container is the canonical test environment: type-check, unit and
+      # component tests (including the real-model Silero integration test),
+      # and the Playwright e2e suite — identical locally (npm run test:docker)
+      # and in CI. No GPU on runners: real Whisper/translation inference stays
+      # manual-verification only (see README).
+      - name: Build test image
+        run: docker build -f Dockerfile.test -t livetranslate-tests .
 
-      - run: npm ci
-
-      - name: Type-check
-        run: npm run check
-
-      # Includes the real-model Silero integration test — the model is
-      # vendored at static/models/silero_vad_v5.onnx, so it runs in CI.
-      - name: Unit and component tests
-        run: npm test
-
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-
-      # No GPU on runners: e2e covers the app shell, overlay, panels, and that
-      # onnxruntime-web + the vendored Silero model load in the built app.
-      # Real Whisper/translation inference stays manual (see README).
-      - name: End-to-end tests
-        run: npm run test:e2e
+      # --ipc=host: Chromium can exhaust a container's default /dev/shm.
+      - name: Run test suite in container
+        run: docker run --rm --ipc=host livetranslate-tests

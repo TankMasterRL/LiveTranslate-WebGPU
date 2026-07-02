@@ -51,9 +51,24 @@ overlay is a sibling element positioned over the player; timing comes from the
   of huggingface.co.
 
 The vendored Silero model is cached through the browser's Cache Storage API, so
-repeat loads skip the network entirely. CI (`.github/workflows/ci.yml`) runs
-type-checking, the full unit suite (including the real-model Silero test), and
-the Playwright e2e suite on every push and PR.
+repeat loads skip the network entirely.
+
+## Testing in Docker / CI
+
+The whole test suite — `svelte-check`, the Vitest unit/component tests
+(including the real-model Silero ONNX integration test), and the Playwright
+e2e suite — is packaged into a container (`Dockerfile.test`, based on the
+official Playwright image pinned to the `@playwright/test` version in the
+lockfile):
+
+```bash
+npm run test:docker   # docker build -f Dockerfile.test … && docker run --rm --ipc=host …
+```
+
+CI (`.github/workflows/ci.yml`) builds and runs this same container on every
+PR commit and on pushes to the mainline, so the test environment is identical
+locally and in CI. Runners have no GPU: real Whisper/translation inference
+remains manual verification (see above).
 
 ## Getting started
 

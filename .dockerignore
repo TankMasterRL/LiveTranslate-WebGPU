@@ -1,0 +1,10 @@
+# Keep the build context small; static/models/ (vendored Silero) stays included.
+node_modules
+build
+.svelte-kit
+test-results
+playwright-report
+coverage
+.git
+*.log
+Dockerfile.test

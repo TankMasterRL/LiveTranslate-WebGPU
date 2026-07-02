@@ -11,6 +11,7 @@ npm run test:unit     # Vitest in watch mode
 npx vitest run src/lib/audio/vad.test.ts        # single test file
 npx vitest run -t "hangover"                    # tests matching a name
 npm run test:e2e      # Playwright (auto-builds and serves on :4173)
+npm run test:docker   # full suite (check+unit+e2e) in the CI container (Dockerfile.test)
 npm run check         # svelte-kit sync + svelte-check (type-check .svelte + .ts)
 npm run build         # static SPA build (adapter-static, output in build/)
 npm run format        # prettier
@@ -19,6 +20,7 @@ npm run format        # prettier
 - Vitest picks up `src/**/*.{test,spec}.ts` (jsdom, globals on, setup in `vitest-setup.ts`); Playwright specs live in `tests/e2e/` and are excluded from Vitest.
 - The Silero integration test (`src/lib/audio/silero-session.integration.test.ts`) runs the **real ONNX model** vendored at `static/models/silero_vad_v5.onnx`; it runs under `@vitest-environment node` and skips itself if the model file is missing (`SILERO_MODEL_PATH` overrides the path).
 - Playwright uses a preinstalled Chromium at `/opt/pw-browsers/chromium` (`PLAYWRIGHT_CHROMIUM_PATH` overrides). Do not run `playwright install`.
+- CI runs the suite inside `Dockerfile.test` (official Playwright base image). **Its tag must match the `@playwright/test` version in `package-lock.json`** — bump them together.
 
 ## What this is
 

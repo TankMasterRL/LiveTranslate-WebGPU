@@ -1,0 +1,21 @@
+# Hermetic test runner: type-check (svelte-check), unit/component tests
+# (Vitest, includes the real-model Silero ONNX integration test — the model is
+# vendored in static/models/), and the Playwright e2e suite, all in one image.
+#
+# The base image version MUST match the @playwright/test version in
+# package-lock.json — the image ships the exact browser builds that library
+# version expects, so no `playwright install` is needed.
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+
+WORKDIR /app
+
+# Dependency layer first so source-only changes don't re-run npm ci.
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci
+
+COPY . .
+
+# The e2e webServer builds the app and serves it on :4173 internally, so this
+# needs no network beyond what the tests stub. Run with --ipc=host: Chromium
+# can exhaust a container's default /dev/shm.
+CMD ["bash", "-c", "npm run check && npm test && npm run test:e2e"]
