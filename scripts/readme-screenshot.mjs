@@ -1,5 +1,5 @@
 // Regenerates docs/screenshot.png, the screenshot embedded in README.md.
-// Run via `npm run screenshot` (which builds first) after any visual UI
+// Run via `bun run screenshot` (which builds first) after any visual UI
 // change, and commit the updated PNG.
 //
 // Serves the static build with Vite's preview server and drives it with
@@ -22,7 +22,7 @@ const prebuilt = process.env.PLAYWRIGHT_CHROMIUM_PATH ?? '/opt/pw-browsers/chrom
 const chromiumPath = existsSync(prebuilt) ? prebuilt : undefined;
 
 if (!existsSync(path.join(root, 'build', 'index.html'))) {
-  console.error('No build output found — run `npm run build` first (or use `npm run screenshot`).');
+  console.error('No build output found — run `bun run build` first (or use `bun run screenshot`).');
   process.exit(1);
 }
 

@@ -16,7 +16,7 @@ jobs:
 
       # The container is the canonical test environment: type-check, unit and
       # component tests (including the real-model Silero integration test),
-      # and the Playwright e2e suite — identical locally (npm run test:docker)
+      # and the Playwright e2e suite — identical locally (bun run test:docker)
       # and in CI. No GPU on runners: real Whisper/translation inference stays
       # manual-verification only (see README).
       - name: Build test image
