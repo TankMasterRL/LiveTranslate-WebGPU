@@ -1,6 +1,6 @@
 .svelte-kit/
 build/
 node_modules/
-package-lock.json
+bun.lock
 test-results/
 playwright-report/
