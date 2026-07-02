@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:unit": "vitest",
     "test:e2e": "playwright test",
+    "test:docker": "docker build -f Dockerfile.test -t livetranslate-tests . && docker run --rm --ipc=host livetranslate-tests",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -32,6 +33,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-web": "^1.26.0-dev.20260416-b7804b056c"
   }
 }

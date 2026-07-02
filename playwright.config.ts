@@ -1,8 +1,11 @@
+import { existsSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
-// The remote environment ships a prebuilt Chromium. Point Playwright at it when
-// present so we never try to download a browser.
-const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_PATH ?? '/opt/pw-browsers/chromium';
+// The remote environment ships a prebuilt Chromium at /opt/pw-browsers; use it
+// when present so we never download a browser there. Elsewhere (e.g. CI) fall
+// back to Playwright's own installed Chromium.
+const prebuilt = process.env.PLAYWRIGHT_CHROMIUM_PATH ?? '/opt/pw-browsers/chromium';
+const chromiumPath = existsSync(prebuilt) ? prebuilt : undefined;
 
 export default defineConfig({
   testDir: 'tests/e2e',
@@ -19,7 +22,11 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { executablePath: chromiumPath }
+        launchOptions: {
+          ...(chromiumPath ? { executablePath: chromiumPath } : {}),
+          // Fake mic so getUserMedia flows can run headless without prompts.
+          args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream']
+        }
       }
     }
   ],

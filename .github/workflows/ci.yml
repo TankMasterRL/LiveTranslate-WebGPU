@@ -1,0 +1,27 @@
+name: CI
+
+# PR branches run once via pull_request; direct pushes to the mainline run via
+# push (previously `push: ['**']` + pull_request double-ran every PR commit).
+on:
+  push:
+    branches: [main, baseline]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The container is the canonical test environment: type-check, unit and
+      # component tests (including the real-model Silero integration test),
+      # and the Playwright e2e suite — identical locally (npm run test:docker)
+      # and in CI. No GPU on runners: real Whisper/translation inference stays
+      # manual-verification only (see README).
+      - name: Build test image
+        run: docker build -f Dockerfile.test -t livetranslate-tests .
+
+      # --ipc=host: Chromium can exhaust a container's default /dev/shm.
+      - name: Run test suite in container
+        run: docker run --rm --ipc=host livetranslate-tests
