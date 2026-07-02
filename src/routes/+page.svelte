@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import { base } from '$app/paths';
   import type { CaptureKind } from '$lib/audio/source';
   import { EnergyVad, type Vad, type VadEngineKind } from '$lib/audio/vad';
   import { WhisperClient } from '$lib/asr/asr-client';
@@ -116,11 +117,12 @@
   async function buildVad(): Promise<{ vad: Vad; notice: string | null }> {
     if (vadEngine !== 'silero') return { vad: new EnergyVad(ENERGY_VAD_OPTIONS), notice: null };
     try {
-      const [{ createSileroSession }, { SileroVad }] = await Promise.all([
+      const [{ createSileroSession }, { SileroVad }, { sileroModelUrl }] = await Promise.all([
         import('$lib/audio/silero-session'),
-        import('$lib/audio/silero-vad')
+        import('$lib/audio/silero-vad'),
+        import('$lib/audio/silero-model')
       ]);
-      const session = await createSileroSession();
+      const session = await createSileroSession(sileroModelUrl(base));
       return { vad: new SileroVad(session, { threshold: 0.5, hangoverFrames: 12 }), notice: null };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

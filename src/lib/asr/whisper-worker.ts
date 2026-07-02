@@ -1,6 +1,10 @@
 /// <reference lib="webworker" />
-import { pipeline } from '@huggingface/transformers';
+import { env, pipeline } from '@huggingface/transformers';
+import { applyModelHost } from '../model-host';
 import type { AsrBackend } from '../pipeline.svelte';
+
+// Optional HF-compatible mirror / self-hosted weights (build-time env).
+applyModelHost(env, import.meta.env.VITE_MODEL_HOST);
 
 // Runs OpenAI Whisper entirely in the browser via transformers.js — the same
 // ONNX-Runtime-Web-on-WebGPU approach used to port the Moebius model.

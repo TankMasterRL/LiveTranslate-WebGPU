@@ -40,6 +40,21 @@ overlay is a sibling element positioned over the player; timing comes from the
 - First run downloads the Whisper weights from Hugging Face (browser-cached
   thereafter).
 
+## Build-time configuration
+
+- `BASE_PATH=repo-name npm run build` — build for subpath hosting (e.g.
+  `https://user.github.io/repo-name/`); asset and model URLs are prefixed
+  automatically.
+- `VITE_MODEL_HOST=https://hf-mirror.example npm run build` — fetch Whisper and
+  translation weights from a Hugging Face-compatible mirror or self-hosted
+  server (must serve the hub's `/{model}/resolve/{revision}/…` layout) instead
+  of huggingface.co.
+
+The vendored Silero model is cached through the browser's Cache Storage API, so
+repeat loads skip the network entirely. CI (`.github/workflows/ci.yml`) runs
+type-checking, the full unit suite (including the real-model Silero test), and
+the Playwright e2e suite on every push and PR.
+
 ## Getting started
 
 ```bash
