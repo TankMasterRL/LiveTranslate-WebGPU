@@ -1,5 +1,7 @@
-# Keep the build context small; static/models/ (vendored Silero) stays included.
+# Keep the build context small. .model-cache is excluded so the image always
+# fetches the Silero model itself (in its own cached layer).
 node_modules
+.model-cache
 build
 .svelte-kit
 test-results

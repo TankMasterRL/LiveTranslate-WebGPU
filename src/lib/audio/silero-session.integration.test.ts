@@ -2,10 +2,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// Real-model integration test: runs only when SILERO_MODEL_PATH points at
-// silero_vad_v5.onnx (e.g. static/models/silero_vad_v5.onnx). Verifies the
-// tensor wiring against the actual ONNX graph rather than a mock.
-const MODEL_PATH = process.env.SILERO_MODEL_PATH ?? 'static/models/silero_vad_v5.onnx';
+// Real-model integration test: the model is not stored in the repo — run
+// `bun run fetch:models` to download it into the gitignored .model-cache/
+// (SILERO_MODEL_PATH overrides the location). Skips itself when absent.
+// Verifies the tensor wiring against the actual ONNX graph rather than a mock.
+const MODEL_PATH = process.env.SILERO_MODEL_PATH ?? '.model-cache/silero_vad_v5.onnx';
 const available = existsSync(MODEL_PATH);
 
 const loadModel = () => new Uint8Array(readFileSync(MODEL_PATH));

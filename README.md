@@ -20,7 +20,7 @@ The original desktop pipeline is reproduced with browser primitives:
 | LiveTranslate (desktop)         | This port (browser)                                                    |
 | ------------------------------- | ---------------------------------------------------------------------- |
 | WASAPI loopback (system audio)  | `getDisplayMedia` tab/system audio · or microphone                     |
-| Silero VAD                      | **Silero v5** (ONNX, vendored) or energy VAD (`src/lib/audio/`)        |
+| Silero VAD                      | **Silero v5** (ONNX, hub-downloaded) or energy VAD (`src/lib/audio/`)  |
 | faster-whisper ASR              | Whisper on **WebGPU** in a Web Worker (`src/lib/asr`)                  |
 | OpenAI-compatible LLM translate | local **WebGPU** model (opus-mt / NLLB-200) _or_ OpenAI-compatible API |
 | PyQt transparent overlay        | positioned Svelte overlay on the YouTube embed                         |
@@ -41,21 +41,20 @@ overlay is a sibling element positioned over the player; timing comes from the
 
 - A **WebGPU-capable browser** (Chrome/Edge; Firefox Nightly / Safari TP). Without
   WebGPU the app falls back to WASM (slower). The UI shows which backend is active.
-- First run downloads the Whisper weights from Hugging Face (browser-cached
-  thereafter).
+- First run downloads the model weights from Hugging Face — Whisper, plus the
+  Silero VAD and translation models if you enable them. No model files ship
+  with the app: everything lands in the browser's model cache (Cache Storage
+  API), so repeat loads skip the network entirely.
 
 ## Build-time configuration
 
 - `BASE_PATH=repo-name bun run build` — build for subpath hosting (e.g.
   `https://user.github.io/repo-name/`); asset and model URLs are prefixed
   automatically.
-- `VITE_MODEL_HOST=https://hf-mirror.example bun run build` — fetch Whisper and
-  translation weights from a Hugging Face-compatible mirror or self-hosted
-  server (must serve the hub's `/{model}/resolve/{revision}/…` layout) instead
-  of huggingface.co.
-
-The vendored Silero model is cached through the browser's Cache Storage API, so
-repeat loads skip the network entirely.
+- `VITE_MODEL_HOST=https://hf-mirror.example bun run build` — fetch the
+  Whisper, translation, and Silero VAD weights from a Hugging Face-compatible
+  mirror or self-hosted server (must serve the hub's
+  `/{model}/resolve/{revision}/…` layout) instead of huggingface.co.
 
 ## Testing in Docker / CI
 
@@ -63,7 +62,8 @@ The whole test suite — `svelte-check`, the Vitest unit/component tests
 (including the real-model Silero ONNX integration test), and the Playwright
 e2e suite — is packaged into a container (`Dockerfile.test`, based on the
 official Playwright image pinned to the `@playwright/test` version in the
-lockfile):
+lockfile). The image downloads the Silero model into `.model-cache/` at build
+time, since no model files are stored in the repo:
 
 ```bash
 bun run test:docker   # docker build -f Dockerfile.test … && docker run --rm --ipc=host …
@@ -113,11 +113,14 @@ The DSP and app logic are covered by fast unit/component tests; the
 WebGPU/Worker/AudioContext wiring is exercised by e2e + manual verification.
 
 ```bash
-bun run test        # Vitest unit + component tests (not `bun test`)
-bun run test:e2e    # Playwright (YouTube API stubbed — no network)
-bun run check       # svelte-check
-bun run build       # static SPA (adapter-static)
-bun run screenshot  # regenerate the README screenshot from the built app
+bun run fetch:models  # download Silero into .model-cache/ (gitignored) for the
+                      # real-model integration test and the offline e2e test;
+                      # both skip themselves when it's absent
+bun run test          # Vitest unit + component tests (not `bun test`)
+bun run test:e2e      # Playwright (YouTube API stubbed — no network)
+bun run check         # svelte-check
+bun run build         # static SPA (adapter-static)
+bun run screenshot    # regenerate the README screenshot from the built app
 ```
 
 The screenshot above is generated (`scripts/readme-screenshot.mjs` drives the
@@ -146,10 +149,10 @@ src/lib/
 Two engines in the **Live transcription** panel:
 
 - **Energy (simple)** — RMS threshold with a hangover tail; zero download, default.
-- **Silero (neural)** — the Silero VAD v5 ONNX model (vendored at
-  `static/models/silero_vad_v5.onnx`, ~2.3 MB, MIT) running on onnxruntime-web.
-  Much better at telling speech from music/noise. If it fails to load, the app
-  falls back to the energy VAD with a notice.
+- **Silero (neural)** — the Silero VAD v5 ONNX model (~2.3 MB, MIT, downloaded
+  from the Hugging Face hub on first use and browser-cached) running on
+  onnxruntime-web. Much better at telling speech from music/noise. If it fails
+  to load, the app falls back to the energy VAD with a notice.
 
 Cue timestamps are real: utterance start is backdated by the captured chunk's
 duration, and Whisper's per-segment timestamps split long utterances into
@@ -164,4 +167,5 @@ stays on screen long enough to read).
 ## Credits
 
 Ported from [TheDeathDragon/LiveTranslate](https://github.com/TheDeathDragon/LiveTranslate).
-Bundles the [Silero VAD](https://github.com/snakers4/silero-vad) v5 model (MIT).
+Uses the [Silero VAD](https://github.com/snakers4/silero-vad) v5 model (MIT),
+downloaded from the Hugging Face hub at runtime.

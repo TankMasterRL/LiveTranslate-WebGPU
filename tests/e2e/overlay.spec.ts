@@ -1,4 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
+import { sileroModelUrl } from '../../src/lib/audio/silero-model';
 import { YT_STUB } from './yt-stub.js';
 
 test.beforeEach(async ({ page }) => {
@@ -53,10 +55,23 @@ test('translation panel exposes local and api modes', async ({ page }) => {
 });
 
 test('silero vad loads in the browser without falling back', async ({ page }) => {
-  // Whisper weights are fetched from the Hugging Face hub, which this test
-  // environment can't reach — block them so the pipeline fails fast *after*
-  // the VAD stage. Silero is vendored locally, so it must load fine.
-  await page.route(/huggingface\.co/, (route) => route.abort());
+  // All model weights download from the Hugging Face hub, which this test
+  // environment can't reach. Serve the real Silero bytes from the local fetch
+  // cache (`bun run fetch:models` — CI's Dockerfile.test does this at build
+  // time) at the exact URL the app requests, and block everything else so the
+  // pipeline fails fast *after* the VAD stage. This proves ort-web + the real
+  // model load in the built app; skip when the model hasn't been fetched.
+  const modelPath = process.env.SILERO_MODEL_PATH ?? '.model-cache/silero_vad_v5.onnx';
+  test.skip(
+    !existsSync(modelPath),
+    `no silero model at ${modelPath} — run \`bun run fetch:models\``
+  );
+  const model = readFileSync(modelPath);
+  await page.route(/huggingface\.co/, (route) =>
+    route.request().url() === sileroModelUrl()
+      ? route.fulfill({ contentType: 'application/octet-stream', body: model })
+      : route.abort()
+  );
 
   await page.goto('/');
   await page.getByRole('button', { name: /load video/i }).click();

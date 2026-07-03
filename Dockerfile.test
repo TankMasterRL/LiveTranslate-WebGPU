@@ -1,6 +1,7 @@
 # Hermetic test runner: type-check (svelte-check), unit/component tests
 # (Vitest, includes the real-model Silero ONNX integration test — the model is
-# vendored in static/models/), and the Playwright e2e suite, all in one image.
+# fetched into .model-cache/ at image build time; no model files live in the
+# repo), and the Playwright e2e suite, all in one image.
 #
 # The base image version MUST match the @playwright/test version in bun.lock —
 # the image ships the exact browser builds that library version expects, so no
@@ -16,6 +17,11 @@ WORKDIR /app
 # Dependency layer first so source-only changes don't re-run bun install.
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
+
+# Fetch the Silero model for the real-model integration test and the offline
+# e2e test (its own layer, so source changes don't re-download the weights).
+COPY scripts/fetch-silero.mjs scripts/
+RUN node scripts/fetch-silero.mjs
 
 COPY . .
 
