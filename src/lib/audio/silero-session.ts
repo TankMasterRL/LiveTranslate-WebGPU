@@ -9,12 +9,17 @@ import type { SileroSession } from './silero-vad';
  * inputs `input` [1,512] f32, `state` [2,1,128] f32, `sr` int64;
  * outputs `output` [1,1] speech probability, `stateN` [2,1,128].
  */
-export async function createSileroSession(source: string | Uint8Array): Promise<SileroSession> {
+export async function createSileroSession(
+  source: string | Uint8Array,
+  options: { sha256?: string } = {}
+): Promise<SileroSession> {
   // Single-threaded: we run one 512-sample frame at a time, and this avoids
   // needing cross-origin isolation (which would break the YouTube embed).
   ort.env.wasm.numThreads = 1;
-  // URLs go through the Cache Storage API so repeat loads skip the network.
-  const model = typeof source === 'string' ? await cachedFetch(source) : source;
+  // URLs go through the Cache Storage API so repeat loads skip the network;
+  // when a sha256 pin is given, cachedFetch refuses bytes that don't match.
+  const model =
+    typeof source === 'string' ? await cachedFetch(source, { sha256: options.sha256 }) : source;
   const session = await ort.InferenceSession.create(model, {
     executionProviders: ['wasm']
   });

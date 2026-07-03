@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -12,6 +13,15 @@ const available = existsSync(MODEL_PATH);
 const loadModel = () => new Uint8Array(readFileSync(MODEL_PATH));
 
 describe.skipIf(!available)('createSileroSession (real model)', () => {
+  it('matches the integrity pin the app enforces at runtime', async () => {
+    // Ties the three copies of the truth together: the bytes the fetch script
+    // downloaded, the sha256 pinned in silero-model.ts (checked in the browser
+    // by cachedFetch), and — transitively — the hash in scripts/fetch-silero.mjs
+    // that verified the download.
+    const { sileroModelSha256 } = await import('./silero-model');
+    expect(createHash('sha256').update(loadModel()).digest('hex')).toBe(sileroModelSha256);
+  });
+
   it('reports a low speech probability for silence and threads state', async () => {
     const { createSileroSession } = await import('./silero-session');
     const session = await createSileroSession(loadModel());

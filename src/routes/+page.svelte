@@ -116,12 +116,15 @@
   async function buildVad(): Promise<{ vad: Vad; notice: string | null }> {
     if (vadEngine !== 'silero') return { vad: new EnergyVad(ENERGY_VAD_OPTIONS), notice: null };
     try {
-      const [{ createSileroSession }, { SileroVad }, { sileroModelUrl }] = await Promise.all([
-        import('$lib/audio/silero-session'),
-        import('$lib/audio/silero-vad'),
-        import('$lib/audio/silero-model')
-      ]);
-      const session = await createSileroSession(sileroModelUrl(import.meta.env.VITE_MODEL_HOST));
+      const [{ createSileroSession }, { SileroVad }, { sileroModelUrl, sileroModelSha256 }] =
+        await Promise.all([
+          import('$lib/audio/silero-session'),
+          import('$lib/audio/silero-vad'),
+          import('$lib/audio/silero-model')
+        ]);
+      const session = await createSileroSession(sileroModelUrl(import.meta.env.VITE_MODEL_HOST), {
+        sha256: sileroModelSha256
+      });
       return { vad: new SileroVad(session, { threshold: 0.5, hangoverFrames: 12 }), notice: null };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

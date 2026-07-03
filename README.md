@@ -151,8 +151,10 @@ Two engines in the **Live transcription** panel:
 - **Energy (simple)** — RMS threshold with a hangover tail; zero download, default.
 - **Silero (neural)** — the Silero VAD v5 ONNX model (~2.3 MB, MIT, downloaded
   from the Hugging Face hub on first use and browser-cached) running on
-  onnxruntime-web. Much better at telling speech from music/noise. If it fails
-  to load, the app falls back to the energy VAD with a notice.
+  onnxruntime-web. The download is verified against a pinned SHA-256 before
+  use, so a corrupted or silently-changed file is rejected rather than run.
+  Much better at telling speech from music/noise. If it fails to load, the
+  app falls back to the energy VAD with a notice.
 
 Cue timestamps are real: utterance start is backdated by the captured chunk's
 duration, and Whisper's per-segment timestamps split long utterances into

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sileroModelUrl } from './silero-model';
+import { sileroModelSha256, sileroModelUrl } from './silero-model';
 
 describe('sileroModelUrl', () => {
   it('downloads from the Hugging Face hub by default', () => {
@@ -20,5 +20,13 @@ describe('sileroModelUrl', () => {
     );
     expect(sileroModelUrl('   ')).toBe(sileroModelUrl());
     expect(sileroModelUrl(undefined)).toBe(sileroModelUrl());
+  });
+});
+
+describe('sileroModelSha256', () => {
+  it('is a lowercase hex SHA-256 pin for the downloaded bytes', () => {
+    // The pin's actual value is verified against the fetched model file by
+    // silero-session.integration.test.ts; this only guards the format.
+    expect(sileroModelSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });
