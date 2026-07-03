@@ -20,9 +20,15 @@ export function sileroModelUrl(modelHost?: string | null): string {
  * SHA-256 (lowercase hex) of the model bytes, enforced by cachedFetch on
  * every load — a download or cached copy that doesn't match is rejected, so
  * the model can't silently drift under the un-pinned `main` revision (Silero
- * has already shipped v6 models upstream). This is the canonical Silero VAD
- * v5 file: byte-identical copies ship in the silero-vad 5.1 and 5.1.2 PyPI
- * releases. When deliberately upgrading the model, refetch and re-pin here
- * and in scripts/fetch-silero.mjs (the integration test enforces they agree).
+ * has already shipped v6 models upstream). This is onnx-community's ONNX
+ * export of Silero VAD v5 — the same org the Whisper weights come from. It
+ * is NOT byte-identical to the upstream snakers4 v5 release file
+ * (sha256 2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f,
+ * the one shipped in the silero-vad 5.1/5.1.2 PyPI releases and
+ * @ricky0123/vad-web); the real-model integration and e2e tests validate the
+ * pinned bytes with actual inference instead. When deliberately upgrading the
+ * model, verify the new file out-of-band, then re-pin here and in
+ * scripts/fetch-silero.mjs together (the integration test enforces they
+ * agree).
  */
-export const sileroModelSha256 = '2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f';
+export const sileroModelSha256 = 'a4a068cd6cf1ea8355b84327595838ca748ec29a25bc91fc82e6c299ccdc5808';

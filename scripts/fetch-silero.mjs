@@ -15,7 +15,7 @@ import { dirname } from 'node:path';
 const host =
   (process.env.VITE_MODEL_HOST ?? '').trim().replace(/\/+$/, '') || 'https://huggingface.co';
 const url = `${host}/onnx-community/silero-vad/resolve/main/onnx/model.onnx`;
-const sha256 = '2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f';
+const sha256 = 'a4a068cd6cf1ea8355b84327595838ca748ec29a25bc91fc82e6c299ccdc5808';
 const dest = process.env.SILERO_MODEL_PATH ?? '.model-cache/silero_vad_v5.onnx';
 
 const hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -39,7 +39,7 @@ const bytes = new Uint8Array(await response.arrayBuffer());
 const actual = hex(bytes);
 if (actual !== sha256) {
   console.error(
-    `Integrity check failed for ${url}:\n  expected sha256 ${sha256}\n  got      sha256 ${actual}\n` +
+    `Integrity check failed for ${url} (${bytes.length} bytes):\n  expected sha256 ${sha256}\n  got      sha256 ${actual}\n` +
       `Refusing to write ${dest}. If the model was upgraded upstream on purpose, verify the new\n` +
       `file out-of-band, then update the pin here and in src/lib/audio/silero-model.ts together.`
   );
