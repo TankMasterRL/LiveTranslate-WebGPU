@@ -12,6 +12,7 @@ bun run test:unit     # Vitest in watch mode
 bunx vitest run src/lib/audio/vad.test.ts       # single test file
 bunx vitest run -t "hangover"                   # tests matching a name
 bun run test:e2e      # Playwright (auto-builds and serves on :4173)
+bun run fetch:models  # download Silero to .model-cache/ (real-model tests skip without it)
 bun run test:docker   # full suite (check+unit+e2e) in the CI container (Dockerfile.test)
 bun run check         # svelte-kit sync + svelte-check (type-check .svelte + .ts)
 bun run build         # static SPA build (adapter-static, output in build/)
@@ -22,7 +23,7 @@ bun run screenshot    # rebuild + regenerate docs/screenshot.png (embedded in RE
 - **Bun is the package manager and script runner only** — Vitest and Playwright remain the test runners. Always `bun run test`, never `bun test` (that invokes Bun's built-in test runner, which cannot run this suite).
 
 - Vitest picks up `src/**/*.{test,spec}.ts` (jsdom, globals on, setup in `vitest-setup.ts`); Playwright specs live in `tests/e2e/` and are excluded from Vitest.
-- The Silero integration test (`src/lib/audio/silero-session.integration.test.ts`) runs the **real ONNX model** vendored at `static/models/silero_vad_v5.onnx`; it runs under `@vitest-environment node` and skips itself if the model file is missing (`SILERO_MODEL_PATH` overrides the path).
+- The Silero integration test (`src/lib/audio/silero-session.integration.test.ts`) runs the **real ONNX model** downloaded to the gitignored `.model-cache/silero_vad_v5.onnx` by `bun run fetch:models` (`SILERO_MODEL_PATH` overrides the path); it runs under `@vitest-environment node` and skips itself if the model file is missing. `Dockerfile.test` runs the fetch at image build, so CI always exercises it.
 - Playwright uses a preinstalled Chromium at `/opt/pw-browsers/chromium` (`PLAYWRIGHT_CHROMIUM_PATH` overrides). Do not run `playwright install`.
 - CI runs the suite inside `Dockerfile.test` (official Playwright base image, with the Bun binary copied in from `oven/bun`). **Its tag must match the `@playwright/test` version in `bun.lock`** — bump them together.
 
@@ -65,8 +66,9 @@ Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance ch
 - **A cross-origin YouTube iframe's audio cannot be read.** Transcription requires sharing tab/system audio (`getDisplayMedia`, WASAPI-loopback analog) or the mic. Don't try to tap the embed.
 - **No COOP/COEP headers, ever** — cross-origin isolation would break the YouTube embed. Consequence: no SharedArrayBuffer, so WASM paths are single-threaded (`ort.env.wasm.numThreads = 1` in `silero-session.ts`).
 - **The overlay never touches the iframe's DOM.** It is a sibling absolutely positioned over the player; time comes from the IFrame Player API polled via rAF (`youtube/player.svelte.ts`).
-- **No GPU in CI/headless.** Real Whisper/translation inference is manual-verification only (steps in README). Tests cover pure logic with fakes; the vendored Silero model is the one real-model automated test; a Playwright test verifies ort-web + the vendored model load in the built app by blocking huggingface.co and asserting the fallback notice does not appear.
-- Whisper and translation model weights download from the Hugging Face hub at runtime (browser-cached). Silero (~2.3MB, MIT) is vendored in `static/models/` deliberately.
+- **No GPU in CI/headless.** Real Whisper/translation inference is manual-verification only (steps in README). Tests cover pure logic with fakes; the fetched Silero model is the one real-model automated test; a Playwright test verifies ort-web + the real model load in the built app by serving the `.model-cache/` bytes at the exact hub URL the app requests while blocking the rest of huggingface.co, and asserting the fallback notice does not appear.
+- **No model files are stored in the repo.** All model weights — Whisper, translation, and Silero VAD (~2.3MB, MIT) — download from the Hugging Face hub at runtime into the browser's Cache Storage model cache. Tests that need the real Silero model fetch it to the gitignored `.model-cache/` via `bun run fetch:models`; its URL in `scripts/fetch-silero.mjs` must stay in sync with `sileroModelUrl` (`src/lib/audio/silero-model.ts`).
+- **The Silero download is integrity-pinned.** `sileroModelSha256` (`silero-model.ts`) is the SHA-256 of the file served by the pinned hub URL (onnx-community's v5 export — not byte-identical to the upstream snakers4 release; see the comment on the constant); `cachedFetch` rejects (and never caches) bytes that don't match, and drops+refetches a cached copy that stops matching. `scripts/fetch-silero.mjs` enforces the same pin, and the integration test asserts the fetched file matches `sileroModelSha256` — so the two pinned copies can't drift apart silently. To upgrade the model: verify the new file out-of-band, then update both pins together.
 
 ## Conventions
 
@@ -76,7 +78,7 @@ Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance ch
 - Persisted settings use `loadPersisted` (`src/lib/persist.ts`), which type-checks and deep-merges stored values over defaults — to persist a new setting, add it to the defaults object in `src/routes/+page.svelte`; stale/corrupt stored shapes degrade to defaults automatically.
 - Adding a translation language: extend `LANGUAGES` in `src/lib/translate/lang.ts` (needs the NLLB FLORES code); `chooseLocalModel` decides fast-opus-mt (auto→en) vs NLLB (explicit source required).
 - **Never hardcode root-relative asset URLs** — subpath deploys (`BASE_PATH` env → `kit.paths.base`) break them. Build asset URLs from `base` (`$app/paths`), but resolve `base` at the call site in browser-only code (e.g. `+page.svelte`): importing `$app/paths` from a module reached by the node-environment integration test pulls in SvelteKit's client runtime and crashes on `window`.
-- Build-time env: `BASE_PATH` (subpath hosting) and `VITE_MODEL_HOST` (HF-compatible weights mirror, applied via `applyModelHost` in both workers). Model bytes fetched by URL go through `cachedFetch` (`src/lib/model-cache.ts`, Cache Storage API).
+- Build-time env: `BASE_PATH` (subpath hosting) and `VITE_MODEL_HOST` (HF-compatible weights mirror, applied via `applyModelHost` in both workers and in `sileroModelUrl`). Model bytes fetched by URL go through `cachedFetch` (`src/lib/model-cache.ts`, Cache Storage API).
 
 ## Branching & commit conventions
 
