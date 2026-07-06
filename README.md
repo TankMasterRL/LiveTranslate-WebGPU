@@ -17,16 +17,16 @@ It overlays live subtitles on top of embedded **YouTube** videos — the same
 
 The original desktop pipeline is reproduced with browser primitives:
 
-| LiveTranslate (desktop)         | This port (browser)                                                    |
-| ------------------------------- | ---------------------------------------------------------------------- |
-| WASAPI loopback (system audio)  | `getDisplayMedia` tab/system audio · or microphone                     |
-| Silero VAD                      | **Silero v5** (ONNX, hub-downloaded) or energy VAD (`src/lib/audio/`)  |
-| faster-whisper ASR              | Whisper on **WebGPU** in a Web Worker (`src/lib/asr`)                  |
-| OpenAI-compatible LLM translate | local **WebGPU** model (opus-mt / NLLB-200) _or_ OpenAI-compatible API |
-| PyQt transparent overlay        | positioned Svelte overlay on the YouTube embed                         |
+| LiveTranslate (desktop)         | This port (browser)                                                               |
+| ------------------------------- | --------------------------------------------------------------------------------- |
+| WASAPI loopback (system audio)  | `getDisplayMedia` tab/system audio · or microphone                                |
+| Silero VAD                      | **Silero v5** (ONNX, hub-downloaded) or energy VAD (`src/lib/audio/`)             |
+| faster-whisper ASR              | Whisper _or_ Nemotron 3.5 streaming on **WebGPU** in a Web Worker (`src/lib/asr`) |
+| OpenAI-compatible LLM translate | local **WebGPU** model (opus-mt / NLLB-200) _or_ OpenAI-compatible API            |
+| PyQt transparent overlay        | positioned Svelte overlay on the YouTube embed                                    |
 
 ```
-capture → frames → VAD → speech chunker → Whisper (WebGPU worker) → [translate] → subtitle track → overlay
+capture → frames → VAD → speech chunker → ASR (WebGPU worker) → [translate] → subtitle track → overlay
 ```
 
 ## Why you must share tab/mic audio
@@ -41,10 +41,11 @@ overlay is a sibling element positioned over the player; timing comes from the
 
 - A **WebGPU-capable browser** (Chrome/Edge; Firefox Nightly / Safari TP). Without
   WebGPU the app falls back to WASM (slower). The UI shows which backend is active.
-- First run downloads the model weights from Hugging Face — Whisper, plus the
-  Silero VAD and translation models if you enable them. No model files ship
-  with the app: everything lands in the browser's model cache (Cache Storage
-  API), so repeat loads skip the network entirely.
+- First run downloads the model weights from Hugging Face — Whisper (or
+  Nemotron if selected), plus the Silero VAD and translation models if you
+  enable them. No model files ship with the app: everything lands in the
+  browser's model cache (Cache Storage API), so repeat loads skip the network
+  entirely.
 
 ## Build-time configuration
 
@@ -89,6 +90,29 @@ bun run dev            # http://localhost:5173
 Cues stay on screen for a reading-speed-based duration, a transcript panel below the
 player collects everything heard (with source text under translations), and your
 settings persist across visits via localStorage.
+
+## Speech recognition
+
+Two engines in the **Live transcription** panel's _Recognition model_ select:
+
+- **Whisper base** (default, ~150 MB) — OpenAI Whisper via
+  [transformers.js](https://huggingface.co/docs/transformers.js), multilingual
+  with auto-detection and per-segment timestamps.
+- **Nemotron 3.5 streaming** (~790 MB) — NVIDIA's
+  [nemotron-3.5-asr-streaming-0.6b](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+  (the int4 ONNX export from
+  [onnx-community](https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4)),
+  a cache-aware streaming FastConformer-RNNT covering 40 language-locales with
+  built-in punctuation and capitalization. transformers.js doesn't support the
+  architecture, so the worker drives the three ONNX graphs (encoder / decoder /
+  joint) directly on onnxruntime-web: the encoder runs on WebGPU (WASM
+  fallback), while the tiny autoregressive decoder+joint stay on WASM to avoid
+  per-token GPU round-trips. Each VAD utterance is fed through the model's
+  native 560 ms streaming interface with carried encoder caches, and greedy
+  RNN-T emission frames give cues true timestamps. A _Spoken language_ select
+  (visible when Nemotron is chosen) conditions the model on a locale via its
+  prompt dictionary; _Auto-detect_ lets the model identify the language itself.
+  All six model files are integrity-pinned by SHA-256, like the Silero VAD.
 
 ## Translation
 
@@ -135,7 +159,9 @@ src/lib/
   audio/      capture (AudioWorklet), resample, framing, speech chunker,
               energy VAD + Silero v5 VAD (onnxruntime-web)
   asr/        WebGPU detection, transcript cleanup, segment→cue alignment,
-              Whisper worker + client
+              shared worker protocol client, Whisper worker + client,
+              Nemotron 3.5 streaming worker + client (nemotron/: log-mel
+              features, cache-aware RNN-T engine, tokenizer, ort sessions)
   translate/  Translator seam: language/model selection, WebGPU translation
               worker + client, OpenAI-compatible adapter, settings factory
   youtube/    IFrame Player API wrapper, URL parsing, embed component

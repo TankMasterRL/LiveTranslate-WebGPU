@@ -11,10 +11,46 @@ export interface CachedFetchDeps {
    * refetched.
    */
   sha256?: string;
+  /**
+   * Called with the cumulative byte count as a download streams in (and once
+   * with the full size on a cache hit) — lets callers of large models drive
+   * a progress bar. Progress is cosmetic: bytes are still verified and
+   * cached whole.
+   */
+  onProgress?: (loadedBytes: number) => void;
 }
 
 function detectCaches(): CacheStorage | null {
   return typeof globalThis.caches !== 'undefined' ? globalThis.caches : null;
+}
+
+/** Read a response body, streaming byte counts to `onProgress` when possible. */
+async function readBody(
+  response: Response,
+  onProgress?: (loadedBytes: number) => void
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!onProgress || !response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    onProgress?.(bytes.byteLength);
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress(loaded);
+  }
+  const bytes = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -42,7 +78,10 @@ export async function cachedFetch(url: string, deps: CachedFetchDeps = {}): Prom
   const hit = cache ? await cache.match(url) : undefined;
   if (hit) {
     const cached = new Uint8Array(await hit.arrayBuffer());
-    if (!deps.sha256 || (await sha256Hex(cached)) === deps.sha256) return cached;
+    if (!deps.sha256 || (await sha256Hex(cached)) === deps.sha256) {
+      deps.onProgress?.(cached.byteLength);
+      return cached;
+    }
     try {
       await cache?.delete(url);
     } catch {
@@ -52,7 +91,7 @@ export async function cachedFetch(url: string, deps: CachedFetchDeps = {}): Prom
 
   const response = await fetchFn(url);
   if (!response.ok) throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readBody(response, deps.onProgress);
 
   if (deps.sha256) {
     const actual = await sha256Hex(bytes);

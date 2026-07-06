@@ -103,4 +103,45 @@ describe('cachedFetch', () => {
       ).rejects.toThrow(new RegExp(`${expected}.*${actual}`, 's'));
     });
   });
+
+  describe('onProgress', () => {
+    it('reports cumulative bytes while downloading', async () => {
+      const onProgress = vi.fn();
+      const bytes = await cachedFetch(URL, { caches: null, fetchFn: okFetch(), onProgress });
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+      expect(onProgress).toHaveBeenCalled();
+      const reported = onProgress.mock.calls.map(([loaded]) => loaded as number);
+      // Monotonic and ending at the full byte count.
+      expect(reported.at(-1)).toBe(BYTES.length);
+      for (let i = 1; i < reported.length; i++) {
+        expect(reported[i]).toBeGreaterThanOrEqual(reported[i - 1]);
+      }
+    });
+
+    it('reports the full size for a cache hit', async () => {
+      const { caches } = fakeCaches({ [URL]: BYTES });
+      const onProgress = vi.fn();
+      await cachedFetch(URL, { caches, fetchFn: okFetch(), onProgress });
+      expect(onProgress).toHaveBeenCalledWith(BYTES.length);
+    });
+
+    it('still verifies integrity when streaming with onProgress', async () => {
+      const wrong = sha256(new Uint8Array([9, 9, 9]));
+      await expect(
+        cachedFetch(URL, { caches: null, fetchFn: okFetch(), sha256: wrong, onProgress: () => {} })
+      ).rejects.toThrow(/integrity/i);
+    });
+
+    it('works when the response has no streamable body', async () => {
+      const fetchFn = vi.fn(async () => {
+        const response = new Response(BYTES.slice());
+        Object.defineProperty(response, 'body', { value: null });
+        return response;
+      });
+      const onProgress = vi.fn();
+      const bytes = await cachedFetch(URL, { caches: null, fetchFn, onProgress });
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+      expect(onProgress).toHaveBeenCalledWith(BYTES.length);
+    });
+  });
 });

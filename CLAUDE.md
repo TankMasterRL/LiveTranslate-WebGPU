@@ -40,7 +40,9 @@ MediaStream (getDisplayMedia tab audio | mic)        src/lib/audio/source.ts
   → AudioWorklet → mono 16kHz, 512-sample frames     src/lib/audio/{capture.ts,pcm-worklet.js,resample.ts,frames.ts}
   → Vad (EnergyVad | SileroVad)                      src/lib/audio/{vad.ts,silero-vad.ts,silero-session.ts}
   → SpeechChunker (utterance chunks)                 src/lib/audio/chunker.ts
-  → Whisper Web Worker (WebGPU, WASM fallback)       src/lib/asr/{whisper-worker.ts,asr-client.ts,webgpu.ts}
+  → ASR Web Worker (WebGPU, WASM fallback)           src/lib/asr/{factory.ts,worker-asr-client.ts,webgpu.ts}
+      Whisper via transformers.js                    src/lib/asr/{whisper-worker.ts,asr-client.ts}
+      Nemotron 3.5 streaming via onnxruntime-web     src/lib/asr/{nemotron-worker.ts,nemotron-client.ts,nemotron/*}
   → segmentsToCues (true timestamps)                 src/lib/asr/align.ts
   → Translator (optional, swappable at runtime)      src/lib/translate/*
   → SubtitleTrack (runes store)                      src/lib/subtitles/track.svelte.ts
@@ -49,9 +51,11 @@ MediaStream (getDisplayMedia tab audio | mic)        src/lib/audio/source.ts
 
 **Every pipeline dependency is an injected seam** (`PipelineDeps`: `detect`, `requestStream`, `createCapture`, `asr`, `translator`, `vad`) with browser defaults. Tests construct the pipeline with fakes and drive PCM frames directly — see `src/lib/pipeline.test.ts` for the pattern. Preserve this: new integrations get a seam + a fake, not a mock of the browser API.
 
-### The worker pattern (used twice, keep them mirrored)
+### The worker pattern (keep the protocols mirrored)
 
-`asr/whisper-worker.ts`↔`asr/asr-client.ts` and `translate/translate-worker.ts`↔`translate/webgpu-translator.ts` share a postMessage protocol: `load` / work message with `id` / `progress` / `ready` / `result` / `error`. Clients match results to promises by id. **Load failures must reject the pending `load()` promise** (an `error` message with no `id`) — a silent hang here was a real bug once already.
+The ASR workers (`asr/whisper-worker.ts` and `asr/nemotron-worker.ts`, both driven by the shared client in `asr/worker-asr-client.ts` behind `WhisperClient`/`NemotronClient`) and `translate/translate-worker.ts`↔`translate/webgpu-translator.ts` share a postMessage protocol: `load` / work message with `id` / `progress` / `ready` / `result` / `error`. Clients match results to promises by id. **Load failures must reject the pending `load()` promise** (an `error` message with no `id`) — a silent hang here was a real bug once already.
+
+The Nemotron path (`asr/nemotron/`) is not served by transformers.js (unsupported architecture); its worker drives three onnxruntime-web sessions directly — encoder on the pipeline's backend, decoder+joint pinned to WASM because the greedy RNN-T loop runs them once per emitted token and per-call GPU dispatch/readback would dominate. The decode logic (`nemotron/engine.ts`) takes the sessions as injected step functions and is unit-tested with fakes; only `nemotron/session.ts` touches ort.
 
 ### Reactivity model
 
@@ -67,8 +71,9 @@ Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance ch
 - **No COOP/COEP headers, ever** — cross-origin isolation would break the YouTube embed. Consequence: no SharedArrayBuffer, so WASM paths are single-threaded (`ort.env.wasm.numThreads = 1` in `silero-session.ts`).
 - **The overlay never touches the iframe's DOM.** It is a sibling absolutely positioned over the player; time comes from the IFrame Player API polled via rAF (`youtube/player.svelte.ts`).
 - **No GPU in CI/headless.** Real Whisper/translation inference is manual-verification only (steps in README). Tests cover pure logic with fakes; the fetched Silero model is the one real-model automated test; a Playwright test verifies ort-web + the real model load in the built app by serving the `.model-cache/` bytes at the exact hub URL the app requests while blocking the rest of huggingface.co, and asserting the fallback notice does not appear.
-- **No model files are stored in the repo.** All model weights — Whisper, translation, and Silero VAD (~2.3MB, MIT) — download from the Hugging Face hub at runtime into the browser's Cache Storage model cache. Tests that need the real Silero model fetch it to the gitignored `.model-cache/` via `bun run fetch:models`; its URL in `scripts/fetch-silero.mjs` must stay in sync with `sileroModelUrl` (`src/lib/audio/silero-model.ts`).
+- **No model files are stored in the repo.** All model weights — Whisper, Nemotron, translation, and Silero VAD (~2.3MB, MIT) — download from the Hugging Face hub at runtime into the browser's Cache Storage model cache. Tests that need the real Silero model fetch it to the gitignored `.model-cache/` via `bun run fetch:models`; its URL in `scripts/fetch-silero.mjs` must stay in sync with `sileroModelUrl` (`src/lib/audio/silero-model.ts`).
 - **The Silero download is integrity-pinned.** `sileroModelSha256` (`silero-model.ts`) is the SHA-256 of the file served by the pinned hub URL (onnx-community's v5 export — not byte-identical to the upstream snakers4 release; see the comment on the constant); `cachedFetch` rejects (and never caches) bytes that don't match, and drops+refetches a cached copy that stops matching. `scripts/fetch-silero.mjs` enforces the same pin, and the integration test asserts the fetched file matches `sileroModelSha256` — so the two pinned copies can't drift apart silently. To upgrade the model: verify the new file out-of-band, then update both pins together.
+- **The Nemotron downloads are pinned the same way** (`NEMOTRON_FILES` in `src/lib/asr/nemotron/model.ts`, one SHA-256 per file; the `.onnx`/`.data` pins are the upstream Git LFS oids, which are content SHA-256s). At ~790MB total the files are far too large for a fetched-model automated test, so real Nemotron inference — like Whisper's — is manual WebGPU verification only; the decode logic is covered by unit tests with fake sessions.
 
 ## Conventions
 
