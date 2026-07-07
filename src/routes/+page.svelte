@@ -2,8 +2,9 @@
   import { onDestroy, onMount } from 'svelte';
   import type { CaptureKind } from '$lib/audio/source';
   import { EnergyVad, type Vad, type VadEngineKind } from '$lib/audio/vad';
-  import { WhisperClient } from '$lib/asr/asr-client';
+  import { createAsrEngine, DEFAULT_ASR_SETTINGS, type AsrSettings } from '$lib/asr/factory';
   import { detectWebGPU, type WebGPUSupport } from '$lib/asr/webgpu';
+  import type { AsrEngine } from '$lib/pipeline.svelte';
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
   import { loadPersisted, savePersisted } from '$lib/persist';
   import { makeCue } from '$lib/subtitles/cue';
@@ -30,6 +31,7 @@
     videoInput: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     captureKind: 'tab' as CaptureKind,
     vadEngine: 'energy' as VadEngineKind,
+    asr: DEFAULT_ASR_SETTINGS,
     overlay: DEFAULT_OVERLAY_SETTINGS,
     translation: DEFAULT_TRANSLATION_SETTINGS
   });
@@ -45,7 +47,12 @@
   let webgpu = $state<WebGPUSupport | null>(null);
   let captureKind = $state<CaptureKind>(persisted.captureKind);
   let vadEngine = $state<VadEngineKind>(persisted.vadEngine);
+  let asrSettings = $state<AsrSettings>(persisted.asr);
   let pipeline = $state<TranscriptionPipeline | null>(null);
+  // The engine the current pipeline was built with; a settings change means
+  // the next start builds a fresh pipeline (and worker) instead of reusing it.
+  let asr: AsrEngine | null = null;
+  let activeAsrKey: string | null = null;
 
   let translationSettings = $state<TranslationSettings>(persisted.translation);
   let translateProgress = $state(0);
@@ -59,6 +66,7 @@
       videoInput,
       captureKind,
       vadEngine,
+      asr: $state.snapshot(asrSettings),
       overlay: $state.snapshot(settings),
       translation: $state.snapshot(translationSettings)
     });
@@ -137,8 +145,15 @@
 
   async function startTranscription() {
     const { vad, notice } = await buildVad();
+    const asrKey = JSON.stringify($state.snapshot(asrSettings));
+    if (pipeline && activeAsrKey !== asrKey) {
+      await pipeline.stop();
+      asr?.dispose?.();
+      pipeline = null;
+    }
     if (!pipeline) {
-      const asr = new WhisperClient({ model: 'onnx-community/whisper-base' });
+      asr = createAsrEngine(asrSettings);
+      activeAsrKey = asrKey;
       pipeline = new TranscriptionPipeline({
         track,
         asr,
@@ -204,6 +219,8 @@
       {webgpu}
       bind:captureKind
       bind:vadEngine
+      bind:asrEngine={asrSettings.engine}
+      bind:asrLanguage={asrSettings.language}
       onStart={startTranscription}
       onStop={stopTranscription}
     />

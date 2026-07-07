@@ -40,7 +40,9 @@ test('translation panel exposes local and api modes', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /load video/i }).click();
 
-  const mode = page.getByLabel(/mode/i);
+  // By role+name: "Recognition model" in the transcribe panel also matches
+  // a bare /mode/i label lookup.
+  const mode = page.getByRole('combobox', { name: 'Mode', exact: true });
   await expect(mode).toBeVisible();
 
   await mode.selectOption('local');
@@ -52,6 +54,26 @@ test('translation panel exposes local and api modes', async ({ page }) => {
   await expect(page.getByLabel(/api key/i)).toBeVisible();
 
   await page.screenshot({ path: 'test-results/translate-panel.png', fullPage: true });
+});
+
+test('transcription panel offers whisper and nemotron recognition models', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /load video/i }).click();
+
+  const model = page.getByLabel(/recognition model/i);
+  await expect(model).toBeVisible();
+  await expect(model).toHaveValue('whisper');
+  // The spoken-language prompt only applies to Nemotron's conditioning.
+  await expect(page.getByLabel(/spoken language/i)).not.toBeVisible();
+
+  await model.selectOption('nemotron');
+  await expect(page.getByLabel(/spoken language/i)).toHaveValue('auto');
+
+  // The choice persists like the other capture settings. (The panel only
+  // renders once a video is loaded, so load one again after the reload.)
+  await page.reload();
+  await page.getByRole('button', { name: /load video/i }).click();
+  await expect(page.getByLabel(/recognition model/i)).toHaveValue('nemotron');
 });
 
 test('silero vad loads in the browser without falling back', async ({ page }) => {
