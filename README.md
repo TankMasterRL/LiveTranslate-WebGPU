@@ -57,6 +57,18 @@ overlay is a sibling element positioned over the player; timing comes from the
   mirror or self-hosted server (must serve the hub's
   `/{model}/resolve/{revision}/…` layout) instead of huggingface.co.
 
+## Deploying to GitHub Pages
+
+Every push to `main` deploys the app to GitHub Pages
+(`.github/workflows/deploy-pages.yml`): the workflow builds with `BASE_PATH`
+set to the repository name and publishes `build/` via the official Pages
+actions, copying the SPA fallback (`200.html`) to `404.html` so deep links
+render client-side. The first run enables Pages on the repository
+automatically (`actions/configure-pages` with `enablement: true`); if that
+step is denied, set the source to **GitHub Actions** once under the
+repository's **Settings → Pages**. The workflow can also be run manually from
+the Actions tab (`workflow_dispatch`).
+
 ## Testing in Docker / CI
 
 The whole test suite — `svelte-check`, the Vitest unit/component tests
