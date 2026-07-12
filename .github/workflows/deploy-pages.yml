@@ -26,6 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # enablement flips the repo's Pages source to "GitHub Actions" on the
+      # first run, so no manual Settings → Pages step is needed.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
