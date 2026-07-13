@@ -1,6 +1,6 @@
 # LiveTranslate WebGPU
 
-*Main idea of web application will be kept but this is an experiment of WebGPU capabilities with inspiration from various sources.*
+_Main idea of web application will be kept but this is an experiment of WebGPU capabilities with inspiration from various sources._
 
 A browser-native port of [**LiveTranslate**](https://github.com/TheDeathDragon/LiveTranslate)
 (a Windows/PyQt6 real-time audio translator) to **SvelteKit + Svelte 5**, running
@@ -43,6 +43,7 @@ overlay is a sibling element positioned over the player; timing comes from the
 
 - A **WebGPU-capable browser** (Chrome/Edge; Firefox Nightly / Safari TP). Without
   WebGPU the app falls back to WASM (slower). The UI shows which backend is active.
+  The Nemotron engine additionally needs WebAssembly JSPI (Chrome/Edge 137+).
 - First run downloads the model weights from Hugging Face — Whisper (or
   Nemotron if selected), plus the Silero VAD and translation models if you
   enable them. No model files ship with the app: everything lands in the
@@ -121,8 +122,12 @@ Two engines in the **Live transcription** panel's _Recognition model_ select:
   architecture, so the worker drives the three ONNX graphs (encoder / decoder /
   joint) directly on onnxruntime-web: the encoder runs on WebGPU (WASM
   fallback), while the tiny autoregressive decoder+joint stay on WASM to avoid
-  per-token GPU round-trips. Each VAD utterance is fed through the model's
-  native 560 ms streaming interface with carried encoder caches, and greedy
+  per-token GPU round-trips. On WebGPU the worker uses onnxruntime-web's
+  native WebGPU execution provider (`onnxruntime-web/jspi`), which needs
+  WebAssembly JSPI — Chrome/Edge 137 or later; on older browsers the load
+  fails with a message suggesting Whisper instead. Each VAD utterance is fed
+  through the model's native 560 ms streaming interface with carried encoder
+  caches, and greedy
   RNN-T emission frames give cues true timestamps. A _Spoken language_ select
   (visible when Nemotron is chosen) conditions the model on a locale via its
   prompt dictionary; _Auto-detect_ lets the model identify the language itself.
