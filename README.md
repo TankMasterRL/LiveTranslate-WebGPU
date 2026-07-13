@@ -1,5 +1,7 @@
 # LiveTranslate WebGPU
 
+*Main idea of web application will be kept but this is an experiment of WebGPU capabilities with inspiration from various sources.*
+
 A browser-native port of [**LiveTranslate**](https://github.com/TheDeathDragon/LiveTranslate)
 (a Windows/PyQt6 real-time audio translator) to **SvelteKit + Svelte 5**, running
 **Whisper speech recognition entirely client-side on WebGPU** via
