@@ -59,8 +59,16 @@ export async function createNemotronSessions(
   // backend. The decoder and joint stay on WASM deliberately: the greedy
   // RNN-T loop runs them once per emitted token, and per-call GPU
   // dispatch/readback latency would dwarf their tiny compute.
-  const [encoder, decoder, joint] = await Promise.all([
-    create(bytes.encoder, 'encoder.onnx.data', [backend]),
+  //
+  // The encoder must finish creating before the wasm sessions start: ort
+  // caches backend init per backend *name*, but 'webgpu' and 'wasm' share one
+  // WASM backend object, so resolving both names concurrently double-calls
+  // its init() and the second call throws "multiple calls to 'initWasm()'
+  // detected." Encoder-first also makes ort pick the JSEP (WebGPU-capable)
+  // wasm binary; a 'wasm'-first init would load the plain one and the
+  // encoder's webgpu init could not reload it.
+  const encoder = await create(bytes.encoder, 'encoder.onnx.data', [backend]);
+  const [decoder, joint] = await Promise.all([
     create(bytes.decoder, 'decoder.onnx.data', ['wasm']),
     create(bytes.joint, 'joint.onnx.data', ['wasm'])
   ]);
