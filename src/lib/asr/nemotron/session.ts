@@ -1,4 +1,3 @@
-import * as ort from 'onnxruntime-web';
 import type { AsrBackend } from '../../pipeline.svelte';
 import { NEMOTRON } from './model';
 import type {
@@ -32,16 +31,43 @@ export interface NemotronModelBytes {
   joint: { model: Uint8Array; data: Uint8Array };
 }
 
-const f32 = (data: Float32Array, dims: number[]) => new ort.Tensor('float32', data, dims);
-const i64 = (value: number) => new ort.Tensor('int64', BigInt64Array.from([BigInt(value)]), [1]);
+type OrtModule = typeof import('onnxruntime-web');
+
+/**
+ * The webgpu backend needs onnxruntime-web's native WebGPU EP build, not the
+ * default (JSEP) build: JSEP's Concat kernel binds every input as its own
+ * storage buffer, and the encoder's per-layer cache concat has 24 inputs —
+ * 25 bindings, above any grantable maxStorageBuffersPerShaderStage (Chrome's
+ * fingerprint-resistant tiers cap the adapter limit at 16, and JSEP never
+ * requests above the default 8). Every encode step then fails WebGPU
+ * validation and silently corrupts the streaming cache. The native EP splits
+ * Concat into limit-sized passes instead. Its build suspends WASM on GPU
+ * readback via JSPI, so it only runs where WebAssembly JSPI is available
+ * (Chrome/Edge 137+) — elsewhere webgpu must fail loudly, since the JSEP
+ * build would produce garbage, not a fallback.
+ */
+async function loadOrt(backend: AsrBackend): Promise<OrtModule> {
+  if (backend !== 'webgpu') return import('onnxruntime-web');
+  if (typeof (WebAssembly as { Suspending?: unknown }).Suspending !== 'function') {
+    throw new Error(
+      'Nemotron on WebGPU needs JavaScript Promise Integration (Chrome/Edge 137 or later). ' +
+        'Update the browser or choose the Whisper engine.'
+    );
+  }
+  return import('onnxruntime-web/jspi');
+}
 
 export async function createNemotronSessions(
   bytes: NemotronModelBytes,
   backend: AsrBackend
 ): Promise<NemotronSessions> {
+  const ort = await loadOrt(backend);
   // Single-threaded WASM: cross-origin isolation would break the YouTube
   // embed, so there is no SharedArrayBuffer (same constraint as Silero).
   ort.env.wasm.numThreads = 1;
+
+  const f32 = (data: Float32Array, dims: number[]) => new ort.Tensor('float32', data, dims);
+  const i64 = (value: number) => new ort.Tensor('int64', BigInt64Array.from([BigInt(value)]), [1]);
 
   const create = (
     source: { model: Uint8Array; data: Uint8Array },
