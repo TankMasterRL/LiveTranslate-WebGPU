@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NEMOTRON,
   NEMOTRON_FILES,
   NEMOTRON_LOCALES,
   NEMOTRON_MODEL_ID,
@@ -7,6 +8,17 @@ import {
   nemotronLangId,
   NEMOTRON_AUTO_LANG_ID
 } from './model';
+
+describe('NEMOTRON', () => {
+  it('uses the log guard the model was trained with (genai_config.json log_eps = 2^-24)', () => {
+    // The export's audio_processor_config.json says 1e-10, but that file is
+    // stale metadata: onnxruntime-genai's reference pipeline reads log_eps
+    // from genai_config.json, and 2^-24 is NeMo's training-time
+    // log_zero_guard_value. With no feature normalization ("NA"), a lower
+    // guard floors quiet mel bins ~6 nats below anything seen in training.
+    expect(NEMOTRON.logGuard).toBe(2 ** -24);
+  });
+});
 
 describe('nemotronFileUrl', () => {
   it('builds hub URLs under the pinned model repo', () => {
