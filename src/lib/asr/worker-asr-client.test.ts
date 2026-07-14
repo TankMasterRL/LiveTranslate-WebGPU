@@ -56,6 +56,14 @@ describe('AsrWorkerClient', () => {
     await expect(first).resolves.toEqual({ text: 'one', segments: [] });
   });
 
+  it('passes an engine diagnostic notice through with the result', async () => {
+    const { worker, client } = makeClient();
+    const pending = client.transcribe(new Float32Array([1]));
+    const id = (worker.posted[0].message as { id: number }).id;
+    worker.emit({ type: 'result', id, text: '', notice: 'decode looks broken' });
+    await expect(pending).resolves.toMatchObject({ text: '', notice: 'decode looks broken' });
+  });
+
   it('transfers the audio buffer to the worker', () => {
     const { worker, client } = makeClient();
     const audio = new Float32Array([1, 2, 3]);

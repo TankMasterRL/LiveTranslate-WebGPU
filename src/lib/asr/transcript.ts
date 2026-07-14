@@ -10,6 +10,12 @@ export interface AsrSegment {
 export interface AsrResult {
   text: string;
   segments?: AsrSegment[];
+  /**
+   * Engine diagnostic worth showing to the user (e.g. repeated empty
+   * decodes). Empty results commit no cue and raise no error, so without
+   * this a persistently failing engine is indistinguishable from silence.
+   */
+  notice?: string;
 }
 
 // Whisper special/timestamp tokens, e.g. <|startoftranscript|>, <|en|>, <|0.00|>.
