@@ -89,7 +89,16 @@ export const NEMOTRON = {
   fMin: 0,
   fMax: 8_000,
   preemphasis: 0.97,
-  logGuard: 1e-10,
+  /**
+   * Additive log floor: ln(melPower + logGuard). genai_config.json's
+   * `log_eps` (2^-24, NeMo's training-time log_zero_guard_value) — the value
+   * onnxruntime-genai's reference pipeline feeds this export. The repo's
+   * audio_processor_config.json says 1e-10 instead, but that file is stale
+   * metadata the reference runtime never reads; with no feature
+   * normalization ("NA"), the lower guard would floor quiet mel bins ~6 nats
+   * below anything the model saw in training.
+   */
+  logGuard: 2 ** -24,
   /** Mel frames consumed per streaming encoder step (560ms). */
   newFrames: 56,
   /** Mel frames of pre-encode cache prepended to every step's input. */

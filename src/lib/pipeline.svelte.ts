@@ -65,6 +65,8 @@ export class TranscriptionPipeline {
   #chunker: SpeechChunker;
   #capture: CaptureLike | null = null;
   #translator: Translator | null;
+  /** The notice the ASR engine set, so recovery clears only that notice. */
+  #asrNotice: string | null = null;
 
   readonly #sampleRate: number;
 
@@ -92,6 +94,7 @@ export class TranscriptionPipeline {
     if (this.status === 'listening' || this.status === 'loading') return;
     this.error = null;
     this.notice = null;
+    this.#asrNotice = null;
     this.status = 'loading';
     this.#vad.reset();
     this.#chunker = new SpeechChunker(this.#deps.chunkerOptions ?? { sampleRate: 16_000 });
@@ -147,11 +150,26 @@ export class TranscriptionPipeline {
       return;
     }
 
+    // Diagnostics from the engine (e.g. repeated empty decodes) show as a
+    // notice — an empty result commits no cue and raises no error, so this
+    // is the only way a failing engine becomes visible.
+    if (result.notice) {
+      this.notice = result.notice;
+      this.#asrNotice = result.notice;
+    }
+
     const cues = segmentsToCues(result, {
       utteranceStartMs: emissionMs - durationMs,
       utteranceDurationMs: durationMs
     });
     if (cues.length === 0) return;
+
+    // Recognition recovered: retract a stale engine diagnostic (but never a
+    // notice someone else owns, like the WASM-fallback message).
+    if (this.#asrNotice !== null && this.notice === this.#asrNotice) {
+      this.notice = null;
+      this.#asrNotice = null;
+    }
 
     // Translation is best-effort: a failure surfaces as an error but never
     // loses the transcription.

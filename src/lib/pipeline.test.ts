@@ -187,6 +187,32 @@ describe('TranscriptionPipeline', () => {
     expect(track.cues.length).toBe(1);
   });
 
+  it('surfaces an ASR diagnostic notice and clears it when recognition recovers', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const responses: AsrResult[] = [
+      { text: '', notice: 'nemotron decoded nothing' },
+      { text: 'hola' }
+    ];
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      asr: asrOf(() => responses.shift() ?? { text: 'hola' })
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    // An empty decode commits no cue but must surface its diagnostic.
+    utterance(capture);
+    await vi.waitFor(() => expect(pipeline.notice).toBe('nemotron decoded nothing'));
+    expect(track.cues.length).toBe(0);
+    expect(pipeline.error).toBeNull();
+
+    // The next successful utterance clears the stale diagnostic.
+    utterance(capture);
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(pipeline.notice).toBeNull();
+  });
+
   it('commits the untranslated cue and surfaces the error when translation fails', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();

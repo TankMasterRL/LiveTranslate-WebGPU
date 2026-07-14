@@ -60,10 +60,14 @@ function argmax(logits: Float32Array): number {
   return best;
 }
 
+/** Silent utterances tolerated before the engine reports itself as stuck. */
+const SILENT_UTTERANCES_BEFORE_NOTICE = 3;
+
 export class NemotronEngine {
   readonly #sessions: NemotronSessions;
   readonly #vocab: string[];
   readonly #extractor: Pick<LogMelExtractor, 'frames'>;
+  #silentUtterances = 0;
 
   constructor(
     sessions: NemotronSessions,
@@ -149,6 +153,37 @@ export class NemotronEngine {
     }
 
     const { text, segments } = decodeUtterance(emitted, this.#vocab);
-    return { text, segments };
+    const notice = this.#diagnoseEmptyDecode(text, emitted.length);
+    return notice ? { text, segments, notice } : { text, segments };
+  }
+
+  /**
+   * An empty decode commits no cue and raises no error, so a persistently
+   * failing engine looks exactly like silence in the UI. Two signatures are
+   * worth surfacing: a flood of emissions that all decode to nothing (e.g.
+   * <unk> from degenerate joint logits — corrupted encoder output), and
+   * ordinary blank decodes repeating across several VAD utterances.
+   */
+  #diagnoseEmptyDecode(text: string, emittedCount: number): string | undefined {
+    if (text) {
+      this.#silentUtterances = 0;
+      return undefined;
+    }
+    this.#silentUtterances++;
+    if (emittedCount >= NEMOTRON.maxSymbolsPerStep) {
+      return (
+        `Nemotron emitted ${emittedCount} tokens but none decoded to text — ` +
+        'the model output looks corrupted. If this persists, the WebGPU ' +
+        'backend may be misbehaving; try the Whisper engine.'
+      );
+    }
+    if (this.#silentUtterances >= SILENT_UTTERANCES_BEFORE_NOTICE) {
+      return (
+        `Nemotron recognized no text in the last ${this.#silentUtterances} ` +
+        'utterances — check the audio source and the spoken-language ' +
+        'setting, or try the Whisper engine.'
+      );
+    }
+    return undefined;
   }
 }

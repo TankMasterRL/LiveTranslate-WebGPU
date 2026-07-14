@@ -202,4 +202,51 @@ describe('NemotronEngine', () => {
     expect(result).toEqual({ text: '', segments: [] });
     expect(encodeCalls).toHaveLength(0);
   });
+
+  // Empty decodes are invisible to the pipeline (no cue, no error), so the
+  // engine must diagnose them itself — see the notice tests below.
+
+  it('flags a flood of emissions that all decode to nothing as corrupted output', async () => {
+    // Degenerate (e.g. all-zero) joint logits argmax to token 0 = <unk>: the
+    // engine emits maxSymbolsPerStep of them per frame and the tokenizer
+    // discards every one, so text is empty despite many emissions.
+    const { sessions } = makeFakes({ framesPerStep: 1, stuckToken: 0 });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    const result = await engine.transcribe(new Float32Array(1), undefined);
+    expect(result.text).toBe('');
+    expect(result.notice).toMatch(/corrupted/i);
+  });
+
+  it('does not flag ordinary silent utterances until they repeat', async () => {
+    const { sessions } = makeFakes({ emissions: {} });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    const first = await engine.transcribe(new Float32Array(1), undefined);
+    const second = await engine.transcribe(new Float32Array(1), undefined);
+    const third = await engine.transcribe(new Float32Array(1), undefined);
+    expect(first.notice).toBeUndefined();
+    expect(second.notice).toBeUndefined();
+    expect(third.notice).toMatch(/no text/i);
+  });
+
+  it('resets the silent-utterance count when a decode produces text', async () => {
+    // Frame 0 (first call) emits "hi."; the three calls after that are silent.
+    const { sessions } = makeFakes({ framesPerStep: 2, emissions: { 0: [1, 3] } });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    expect((await engine.transcribe(new Float32Array(1), undefined)).text).toBe('hi.');
+    expect((await engine.transcribe(new Float32Array(1), undefined)).notice).toBeUndefined();
+    expect((await engine.transcribe(new Float32Array(1), undefined)).notice).toBeUndefined();
+    expect((await engine.transcribe(new Float32Array(1), undefined)).notice).toMatch(/no text/i);
+  });
 });

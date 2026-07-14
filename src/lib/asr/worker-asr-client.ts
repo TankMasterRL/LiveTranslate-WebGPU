@@ -11,7 +11,7 @@ import type { AsrResult, AsrSegment } from './transcript';
 export type AsrWorkerOutbound =
   | { type: 'progress'; info: { progress?: number; status?: string } }
   | { type: 'ready' }
-  | { type: 'result'; id: number; text: string; segments?: AsrSegment[] }
+  | { type: 'result'; id: number; text: string; segments?: AsrSegment[]; notice?: string }
   | { type: 'error'; id?: number; message: string };
 
 /** The slice of Worker the client uses (injectable for tests). */
@@ -95,7 +95,9 @@ export class AsrWorkerClient implements AsrEngine {
         this.#readyResolvers.shift()?.resolve();
         break;
       case 'result':
-        this.#pending.get(message.id)?.resolve({ text: message.text, segments: message.segments });
+        this.#pending
+          .get(message.id)
+          ?.resolve({ text: message.text, segments: message.segments, notice: message.notice });
         this.#pending.delete(message.id);
         break;
       case 'error':

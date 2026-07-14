@@ -70,8 +70,8 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
 
     if (message.type === 'transcribe') {
       if (!engine) throw new Error('Nemotron model is not loaded yet.');
-      const { text, segments } = await engine.transcribe(message.audio, message.language);
-      ctx.postMessage({ type: 'result', id: message.id, text, segments });
+      const { text, segments, notice } = await engine.transcribe(message.audio, message.language);
+      ctx.postMessage({ type: 'result', id: message.id, text, segments, notice });
     }
   } catch (err) {
     ctx.postMessage({
