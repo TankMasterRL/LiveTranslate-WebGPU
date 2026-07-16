@@ -4,11 +4,13 @@
   import type { AsrEngineKind } from '$lib/asr/factory';
   import { NEMOTRON_LOCALES } from '$lib/asr/nemotron/model';
   import type { WebGPUSupport } from '$lib/asr/webgpu';
+  import { nemotronSupport, WEBGPU_COMPAT_NOTICE, type BrowserCompat } from '$lib/compat';
   import type { TranscriptionPipeline } from '$lib/pipeline.svelte';
 
   interface Props {
     pipeline: TranscriptionPipeline | null;
     webgpu: WebGPUSupport | null;
+    compat: BrowserCompat | null;
     captureKind: CaptureKind;
     vadEngine: VadEngineKind;
     asrEngine: AsrEngineKind;
@@ -20,6 +22,7 @@
   let {
     pipeline,
     webgpu,
+    compat,
     captureKind = $bindable(),
     vadEngine = $bindable(),
     asrEngine = $bindable(),
@@ -32,6 +35,12 @@
   const busy = $derived(status === 'loading' || status === 'listening');
   const levelPct = $derived(Math.min(100, Math.round((pipeline?.level ?? 0) * 400)));
   const progressPct = $derived(Math.round((pipeline?.progress ?? 0) * 100));
+
+  // Compat gates: until detection has run (null props) nothing is disabled.
+  const tabCapture = $derived(compat?.tabCapture ?? { supported: true, notice: null });
+  const nemotron = $derived(
+    compat ? nemotronSupport(compat, webgpu) : { supported: true, notice: null }
+  );
 </script>
 
 <section class="panel">
@@ -53,7 +62,7 @@
     <label>
       <span>Audio source</span>
       <select bind:value={captureKind} disabled={busy}>
-        <option value="tab">Tab / system audio</option>
+        <option value="tab" disabled={!tabCapture.supported}>Tab / system audio</option>
         <option value="microphone">Microphone</option>
       </select>
     </label>
@@ -70,7 +79,9 @@
       <span>Recognition model</span>
       <select bind:value={asrEngine} disabled={busy}>
         <option value="whisper">Whisper base (~150 MB)</option>
-        <option value="nemotron">Nemotron 3.5 streaming (~790 MB)</option>
+        <option value="nemotron" disabled={!nemotron.supported}>
+          Nemotron 3.5 streaming (~790 MB)
+        </option>
       </select>
     </label>
 
@@ -94,6 +105,16 @@
       </button>
     {/if}
   </div>
+
+  {#if webgpu && !webgpu.supported}
+    <p class="sub warn">{WEBGPU_COMPAT_NOTICE}</p>
+  {/if}
+  {#if tabCapture.notice}
+    <p class="sub warn">{tabCapture.notice}</p>
+  {/if}
+  {#if nemotron.notice}
+    <p class="sub warn">{nemotron.notice}</p>
+  {/if}
 
   {#if status === 'loading' && progressPct > 0}
     <div class="meter"><div class="fill" style:width="{progressPct}%"></div></div>
