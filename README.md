@@ -92,6 +92,10 @@ remains manual verification (see above).
 
 ## Getting started
 
+Requires [Bun](https://bun.sh) and Node.js ≥ 24 (`.nvmrc`) — Bun drives
+installs and package scripts, while Vite, Vitest, and Playwright execute under
+Node via their shebangs.
+
 ```bash
 bun install
 bun run dev            # http://localhost:5173

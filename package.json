@@ -4,6 +4,9 @@
   "private": true,
   "description": "Browser-native, WebGPU-powered real-time subtitle overlay for YouTube embeds — a SvelteKit + Svelte 5 port of LiveTranslate.",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
