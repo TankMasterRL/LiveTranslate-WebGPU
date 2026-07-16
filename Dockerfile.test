@@ -9,7 +9,8 @@
 FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 # Bun drives installs and package scripts; the Vitest/Playwright binaries still
-# execute under the image's Node runtime via their shebangs.
+# execute under the image's Node runtime via their shebangs — Node 24 in this
+# image, satisfying the `engines.node: >=24` pin in package.json.
 COPY --from=oven/bun:1.3.14 /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
