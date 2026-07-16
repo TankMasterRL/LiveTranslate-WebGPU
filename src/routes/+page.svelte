@@ -4,6 +4,7 @@
   import { EnergyVad, type Vad, type VadEngineKind } from '$lib/audio/vad';
   import { createAsrEngine, DEFAULT_ASR_SETTINGS, type AsrSettings } from '$lib/asr/factory';
   import { detectWebGPU, type WebGPUSupport } from '$lib/asr/webgpu';
+  import { detectBrowserCompat, nemotronSupport, type BrowserCompat } from '$lib/compat';
   import type { AsrEngine } from '$lib/pipeline.svelte';
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
   import { loadPersisted, savePersisted } from '$lib/persist';
@@ -45,6 +46,7 @@
   const track = new SubtitleTrack();
 
   let webgpu = $state<WebGPUSupport | null>(null);
+  let compat = $state<BrowserCompat | null>(null);
   let captureKind = $state<CaptureKind>(persisted.captureKind);
   let vadEngine = $state<VadEngineKind>(persisted.vadEngine);
   let asrSettings = $state<AsrSettings>(persisted.asr);
@@ -77,7 +79,14 @@
   const activeCue = $derived(track.activeAt(player.currentMs, 250) ?? null);
 
   onMount(async () => {
+    // Persisted choices this browser can't run degrade to the working
+    // alternative (the panel also disables the unsupported options).
+    compat = detectBrowserCompat();
+    if (!compat.tabCapture.supported && captureKind === 'tab') captureKind = 'microphone';
     webgpu = await detectWebGPU();
+    if (asrSettings.engine === 'nemotron' && !nemotronSupport(compat, webgpu).supported) {
+      asrSettings.engine = 'whisper';
+    }
   });
 
   onDestroy(() => {
@@ -217,6 +226,7 @@
     <TranscribePanel
       {pipeline}
       {webgpu}
+      {compat}
       bind:captureKind
       bind:vadEngine
       bind:asrEngine={asrSettings.engine}
