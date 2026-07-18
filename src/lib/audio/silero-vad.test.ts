@@ -16,7 +16,48 @@ function sessionOf(probabilities: number[]): SileroSession & { states: Float32Ar
   };
 }
 
+function recordingSession(): SileroSession & { inputs: Float32Array[] } {
+  const inputs: Float32Array[] = [];
+  return {
+    inputs,
+    run: async (frame: Float32Array, state: Float32Array) => {
+      inputs.push(frame.slice());
+      return { probability: 0.9, state };
+    }
+  };
+}
+
 describe('SileroVad', () => {
+  it('prefixes each inference with the previous frame’s 64-sample tail (v5 context)', async () => {
+    const session = recordingSession();
+    const vad = new SileroVad(session, {});
+    const first = new Float32Array(512).fill(1);
+    const second = new Float32Array(512).fill(2);
+    vad.process(first);
+    await tick();
+    vad.process(second);
+    await tick();
+
+    // First window: zero context + the frame.
+    expect(session.inputs[0]).toHaveLength(64 + 512);
+    expect(session.inputs[0].subarray(0, 64).every((v) => v === 0)).toBe(true);
+    expect(session.inputs[0].subarray(64).every((v) => v === 1)).toBe(true);
+    // Second window: the first frame's last 64 samples, then the new frame.
+    expect(session.inputs[1].subarray(0, 64).every((v) => v === 1)).toBe(true);
+    expect(session.inputs[1].subarray(64).every((v) => v === 2)).toBe(true);
+  });
+
+  it('reset clears the carried context', async () => {
+    const session = recordingSession();
+    const vad = new SileroVad(session, {});
+    vad.process(new Float32Array(512).fill(3));
+    await tick();
+    vad.reset();
+    vad.process(new Float32Array(512).fill(4));
+    await tick();
+    expect(session.inputs[1].subarray(0, 64).every((v) => v === 0)).toBe(true);
+  });
+
   it('activates once the model reports speech (one-frame decision lag)', async () => {
     const vad = new SileroVad(sessionOf([0.9, 0.9]), { threshold: 0.5, hangoverFrames: 1 });
     // First call kicks off inference; the decision lands a frame later.

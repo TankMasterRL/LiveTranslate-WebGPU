@@ -47,4 +47,71 @@ describe.skipIf(!available)('createSileroSession (real model)', () => {
     }
     expect(vad.process(new Float32Array(512))).toBe(false);
   });
+
+  it('drives SileroVad end-to-end: a sustained voiced signal activates it', async () => {
+    // Guards the v5 context contract: without the 64-sample context prefix the
+    // model's probabilities collapse after the first few windows and sustained
+    // speech is never detected (the energy-VAD-works-but-Silero-doesn't bug).
+    // A synthetic vowel is crude speech, so assert on the steady state — most
+    // of the utterance's second half must be voiced — not on every frame.
+    const { createSileroSession } = await import('./silero-session');
+    const { SileroVad } = await import('./silero-vad');
+    const vad = new SileroVad(await createSileroSession(loadModel()), {
+      threshold: 0.5,
+      hangoverFrames: 1
+    });
+
+    const samples = syntheticVowel(1.5);
+    const decisions: boolean[] = [];
+    for (let offset = 0; offset + 512 <= samples.length; offset += 512) {
+      // Each call reports the previous frame's verdict (fresh, thanks to the
+      // sleep) — a one-frame shift the second-half assertion doesn't notice.
+      decisions.push(vad.process(samples.subarray(offset, offset + 512)));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const secondHalf = decisions.slice(Math.floor(decisions.length / 2));
+    const voiced = secondHalf.filter(Boolean).length;
+    expect(voiced).toBeGreaterThanOrEqual(Math.ceil(secondHalf.length / 2));
+  });
 });
+
+/** Glottal-pulse train through /a/ formant resonators — crude synthetic speech. */
+function syntheticVowel(seconds: number, sampleRate = 16_000): Float32Array {
+  const n = Math.round(seconds * sampleRate);
+  const excitation = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const f0 = 110 + 20 * Math.sin((2 * Math.PI * 3 * i) / sampleRate); // pitch wobble
+    if (i % Math.round(sampleRate / f0) < 2) excitation[i] = 1;
+  }
+  const resonator = (input: Float32Array, freq: number, bandwidth: number) => {
+    const r = Math.exp((-Math.PI * bandwidth) / sampleRate);
+    const c = 2 * r * Math.cos((2 * Math.PI * freq) / sampleRate);
+    const out = new Float32Array(input.length);
+    let y1 = 0;
+    let y2 = 0;
+    for (let i = 0; i < input.length; i++) {
+      const y = (1 - r) * input[i] + c * y1 - r * r * y2;
+      out[i] = y;
+      y2 = y1;
+      y1 = y;
+    }
+    return out;
+  };
+  const voiced = new Float32Array(n);
+  for (const [freq, bandwidth, gain] of [
+    [700, 110, 1],
+    [1220, 120, 0.6],
+    [2600, 160, 0.3]
+  ]) {
+    const band = resonator(excitation, freq, bandwidth);
+    for (let i = 0; i < n; i++) voiced[i] += gain * band[i];
+  }
+  let peak = 0;
+  for (const v of voiced) peak = Math.max(peak, Math.abs(v));
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const envelope = 0.55 + 0.45 * Math.sin((2 * Math.PI * 4 * i) / sampleRate); // syllable rate
+    out[i] = (0.3 * envelope * voiced[i]) / peak;
+  }
+  return out;
+}
