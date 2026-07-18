@@ -6,7 +6,8 @@ import type { SileroSession } from './silero-vad';
  * Create a Silero v5 inference session with onnxruntime-web (WASM backend —
  * the model is tiny, so no WebGPU needed). Contract verified against the real
  * model in silero-session.integration.test.ts:
- * inputs `input` [1,512] f32, `state` [2,1,128] f32, `sr` int64;
+ * inputs `input` [1,N] f32 (N = 64 context + 512 fresh samples — SileroVad
+ * threads the context), `state` [2,1,128] f32, `sr` int64;
  * outputs `output` [1,1] speech probability, `stateN` [2,1,128].
  */
 export async function createSileroSession(
