@@ -103,8 +103,9 @@ bun run dev            # http://localhost:5173
 
 1. Paste a YouTube URL and **Load video**.
 2. Click **Preview subtitle overlay** to see the overlay with demo cues, or
-3. **Start transcription**, pick _Tab / system audio_ (share this tab **with audio**)
-   or _Microphone_, and live subtitles appear over the video.
+3. **Start transcription**, pick _This tab (app audio)_ — the video plays in this
+   tab, so the picker pre-selects it; just share **with audio** in one click — or
+   _Another tab / window_ or _Microphone_, and live subtitles appear over the video.
 
 Cues stay on screen for a reading-speed-based duration, a transcript panel below the
 player collects everything heard (with source text under translations), and your

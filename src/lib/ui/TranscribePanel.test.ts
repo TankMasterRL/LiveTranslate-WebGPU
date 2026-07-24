@@ -56,16 +56,25 @@ describe('TranscribePanel', () => {
     expect(onStart).toHaveBeenCalledOnce();
   });
 
+  it('offers current-tab, other-tab, and microphone audio sources', () => {
+    render(TranscribePanel, { props: { ...baseProps } });
+    const select = screen.getByLabelText(/audio source/i);
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(options).toEqual(['current-tab', 'tab', 'microphone']);
+  });
+
   it('leaves every option enabled and shows no compat notice when all is supported', () => {
     render(TranscribePanel, { props: { ...baseProps } });
-    const tab = screen.getByRole('option', { name: /tab \/ system audio/i }) as HTMLOptionElement;
+    const currentTab = screen.getByRole('option', { name: /this tab/i }) as HTMLOptionElement;
+    const tab = screen.getByRole('option', { name: /another tab/i }) as HTMLOptionElement;
     const nemotron = screen.getByRole('option', { name: /nemotron/i }) as HTMLOptionElement;
+    expect(currentTab.disabled).toBe(false);
     expect(tab.disabled).toBe(false);
     expect(nemotron.disabled).toBe(false);
     expect(screen.queryByText(WEBGPU_COMPAT_NOTICE)).toBeNull();
   });
 
-  it('disables tab audio capture and shows its notice when getDisplayMedia is missing', () => {
+  it('disables both tab-capture options and shows the notice when getDisplayMedia is missing', () => {
     const compat: BrowserCompat = {
       ...SUPPORTED_COMPAT,
       tabCapture: { supported: false, notice: 'no tab capture in this browser' }
@@ -73,7 +82,9 @@ describe('TranscribePanel', () => {
     render(TranscribePanel, {
       props: { ...baseProps, compat, captureKind: 'microphone' as const }
     });
-    const tab = screen.getByRole('option', { name: /tab \/ system audio/i }) as HTMLOptionElement;
+    const currentTab = screen.getByRole('option', { name: /this tab/i }) as HTMLOptionElement;
+    const tab = screen.getByRole('option', { name: /another tab/i }) as HTMLOptionElement;
+    expect(currentTab.disabled).toBe(true);
     expect(tab.disabled).toBe(true);
     expect(screen.getByText('no tab capture in this browser')).toBeInTheDocument();
   });
