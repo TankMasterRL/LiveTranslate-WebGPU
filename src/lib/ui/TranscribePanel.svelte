@@ -54,15 +54,17 @@
   </div>
 
   <p class="note">
-    A cross-origin YouTube player's audio can't be read directly, so share this
-    <strong>tab's audio</strong> (or use the microphone) to transcribe what's playing.
+    A cross-origin YouTube player's audio can't be read directly. The video plays in
+    <strong>this tab</strong>, so sharing this tab's audio captures it in one click — or share
+    another tab/window, or use the microphone.
   </p>
 
   <div class="row">
     <label>
       <span>Audio source</span>
       <select bind:value={captureKind} disabled={busy}>
-        <option value="tab" disabled={!tabCapture.supported}>Tab / system audio</option>
+        <option value="current-tab" disabled={!tabCapture.supported}>This tab (app audio)</option>
+        <option value="tab" disabled={!tabCapture.supported}>Another tab / window</option>
         <option value="microphone">Microphone</option>
       </select>
     </label>

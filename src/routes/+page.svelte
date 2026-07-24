@@ -30,7 +30,7 @@
   const SETTINGS_KEY = 'livetranslate-webgpu:settings';
   const persisted = loadPersisted(SETTINGS_KEY, {
     videoInput: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    captureKind: 'tab' as CaptureKind,
+    captureKind: 'current-tab' as CaptureKind,
     vadEngine: 'energy' as VadEngineKind,
     asr: DEFAULT_ASR_SETTINGS,
     overlay: DEFAULT_OVERLAY_SETTINGS,
@@ -82,7 +82,7 @@
     // Persisted choices this browser can't run degrade to the working
     // alternative (the panel also disables the unsupported options).
     compat = detectBrowserCompat();
-    if (!compat.tabCapture.supported && captureKind === 'tab') captureKind = 'microphone';
+    if (!compat.tabCapture.supported && captureKind !== 'microphone') captureKind = 'microphone';
     webgpu = await detectWebGPU();
     if (asrSettings.engine === 'nemotron' && !nemotronSupport(compat, webgpu).supported) {
       asrSettings.engine = 'whisper';
