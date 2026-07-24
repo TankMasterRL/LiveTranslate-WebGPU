@@ -5,7 +5,8 @@ import TranscribePanel from './TranscribePanel.svelte';
 
 const SUPPORTED_COMPAT: BrowserCompat = {
   tabCapture: { supported: true, notice: null },
-  jspi: { supported: true, notice: null }
+  jspi: { supported: true, notice: null },
+  youtubeEmbed: { supported: true, notice: null }
 };
 
 const baseProps = {
@@ -118,5 +119,14 @@ describe('TranscribePanel', () => {
       props: { ...baseProps, webgpu: { supported: false, reason: 'no adapter' } }
     });
     expect(screen.getByText(WEBGPU_COMPAT_NOTICE)).toBeInTheDocument();
+  });
+
+  it('shows the cross-origin-isolation notice when the embed would be blocked', () => {
+    const compat: BrowserCompat = {
+      ...SUPPORTED_COMPAT,
+      youtubeEmbed: { supported: false, notice: 'cross-origin isolated — embed blocked' }
+    };
+    render(TranscribePanel, { props: { ...baseProps, compat } });
+    expect(screen.getByText('cross-origin isolated — embed blocked')).toBeInTheDocument();
   });
 });
