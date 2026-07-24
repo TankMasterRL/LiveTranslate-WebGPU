@@ -106,6 +106,28 @@ describe('SileroVad', () => {
     expect(session.states[2].every((v) => v === 0)).toBe(true);
   });
 
+  it('drops an inference still in flight when reset is called', async () => {
+    // A slow inference queued before reset must not clobber activation after
+    // it — otherwise a stale "speech" verdict revives the chunker post-reset.
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    let calls = 0;
+    const session: SileroSession = {
+      run: async (_f, state) => {
+        calls++;
+        if (calls === 1) await gate; // first run hangs until released
+        return { probability: 0.9, state };
+      }
+    };
+    const vad = new SileroVad(session, { threshold: 0.5, hangoverFrames: 5 });
+    vad.process(frame()); // kicks off the slow first inference
+    vad.reset(); // reset before it resolves
+    releaseFirst(); // now let the stale inference finish
+    await tick();
+    await tick();
+    expect(vad.process(frame())).toBe(false); // stale 0.9 did not activate
+  });
+
   it('deactivates and keeps working when inference fails', async () => {
     let calls = 0;
     const session: SileroSession = {

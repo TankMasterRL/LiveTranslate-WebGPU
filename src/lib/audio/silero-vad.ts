@@ -45,6 +45,9 @@ export class SileroVad implements Vad {
   #queue: Promise<void> = Promise.resolve();
   #active = false;
   #countdown = 0;
+  // Bumped on reset so inferences queued (or in flight) beforehand can't apply
+  // their now-stale verdict/state to the fresh session afterwards.
+  #generation = 0;
 
   constructor(session: SileroSession, options: SileroVadOptions = {}) {
     this.#session = session;
@@ -58,9 +61,12 @@ export class SileroVad implements Vad {
     window.set(this.#context);
     window.set(frame, CONTEXT_SIZE);
     this.#context = window.slice(window.length - CONTEXT_SIZE);
+    const generation = this.#generation;
     this.#queue = this.#queue.then(async () => {
+      if (generation !== this.#generation) return; // reset while still queued
       try {
         const { probability, state } = await this.#session.run(window, this.#state);
+        if (generation !== this.#generation) return; // reset during inference
         this.#state = state;
         if (probability >= this.#threshold) {
           this.#active = true;
@@ -70,16 +76,19 @@ export class SileroVad implements Vad {
           if (this.#countdown > 0) this.#countdown--;
         }
       } catch {
-        this.#active = false;
+        if (generation === this.#generation) this.#active = false;
       }
     });
     return this.#active;
   }
 
   reset(): void {
+    this.#generation++;
     this.#state = new Float32Array(STATE_SIZE);
     this.#context = new Float32Array(CONTEXT_SIZE);
     this.#active = false;
     this.#countdown = 0;
+    // Detach any pending inferences; fresh frames start on a clean chain.
+    this.#queue = Promise.resolve();
   }
 }
