@@ -114,6 +114,9 @@
   {#if tabCapture.notice}
     <p class="sub warn">{tabCapture.notice}</p>
   {/if}
+  {#if compat?.youtubeEmbed.notice}
+    <p class="sub warn">{compat.youtubeEmbed.notice}</p>
+  {/if}
   {#if nemotron.notice}
     <p class="sub warn">{nemotron.notice}</p>
   {/if}

@@ -34,6 +34,25 @@ describe('detectBrowserCompat', () => {
     expect(compat.jspi.supported).toBe(false);
     expect(compat.jspi.notice).toMatch(/137\+/);
   });
+
+  it('reports the YouTube embed as usable when the document is not cross-origin isolated', () => {
+    const compat = detectBrowserCompat({ ...fullEnv(), crossOriginIsolated: false });
+    expect(compat.youtubeEmbed).toEqual({ supported: true, notice: null });
+  });
+
+  it('treats an absent crossOriginIsolated flag (jsdom/node) as not isolated', () => {
+    const compat = detectBrowserCompat({ ...fullEnv(), crossOriginIsolated: undefined });
+    expect(compat.youtubeEmbed.supported).toBe(true);
+  });
+
+  it('flags cross-origin isolation as breaking the YouTube embed', () => {
+    const compat = detectBrowserCompat({ ...fullEnv(), crossOriginIsolated: true });
+    expect(compat.youtubeEmbed.supported).toBe(false);
+    expect(compat.youtubeEmbed.notice).toMatch(/cross-origin isolat/i);
+    expect(compat.youtubeEmbed.notice).toMatch(/Cross-Origin-Opener-Policy|COOP/);
+    expect(compat.youtubeEmbed.notice).toMatch(/Cross-Origin-Embedder-Policy|COEP/);
+    expect(compat.youtubeEmbed.notice).toMatch(/YouTube|embed|iframe/i);
+  });
 });
 
 describe('nemotronSupport', () => {

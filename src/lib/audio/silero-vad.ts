@@ -1,6 +1,12 @@
 import type { Vad } from './vad';
 
-/** State tensor data; ORT may back it with a SharedArrayBuffer. */
+/**
+ * State tensor data. Typed against the broad `ArrayBufferLike` backing because
+ * ORT's tensor `.data` permits a SharedArrayBuffer under multi-threaded WASM —
+ * but this app pins `ort.env.wasm.numThreads = 1` (no cross-origin isolation,
+ * so no SharedArrayBuffer; see silero-session.ts), so in practice the backing
+ * is always a plain ArrayBuffer.
+ */
 export type SileroState = Float32Array<ArrayBufferLike>;
 
 /** One inference step of the Silero VAD model (see silero-session.ts). */

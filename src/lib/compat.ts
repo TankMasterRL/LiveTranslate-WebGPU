@@ -6,6 +6,15 @@ import type { WebGPUSupport } from './asr/webgpu';
  * MDN's Browser Compatibility Data (api.MediaDevices.getDisplayMedia
  * audio_capture_support, api.GPU, webassembly.api.Suspending) — keep them in
  * sync with BCD when upgrading claims.
+ *
+ * It also detects the inverse of a capability: cross-origin isolation. Shared
+ * memory (SharedArrayBuffer / threaded WASM) is gated behind COOP + COEP
+ * headers per the MDN "Security requirements" —
+ * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer#security_requirements
+ * — but those same headers would block the cross-origin YouTube embed, so this
+ * app deliberately stays non-isolated (WASM runs single-threaded, no
+ * SharedArrayBuffer). `youtubeEmbed` flags a stray isolation header as a
+ * misconfiguration rather than a silently broken embed.
  */
 
 export interface FeatureCompat {
@@ -19,23 +28,40 @@ export interface BrowserCompat {
   tabCapture: FeatureCompat;
   /** WebAssembly JSPI — required by Nemotron's WebGPU session build. */
   jspi: FeatureCompat;
+  /**
+   * The cross-origin YouTube <iframe> embed — the core feature. `supported` is
+   * true when the document is NOT cross-origin isolated (the normal, required
+   * state); it flips to false if a stray COOP/COEP header turns isolation on,
+   * which would block the embed. See the note below on why this app forgoes
+   * cross-origin isolation (and therefore SharedArrayBuffer / threaded WASM).
+   */
+  youtubeEmbed: FeatureCompat;
 }
 
 /** Injection seam so tests can probe arbitrary browser shapes. */
 export interface CompatEnv {
   mediaDevices?: { getDisplayMedia?: unknown };
   wasm?: { Suspending?: unknown };
+  /**
+   * Whether the document is cross-origin isolated — the WorkerGlobalScope /
+   * Window `crossOriginIsolated` flag, true only when both COOP: same-origin
+   * and COEP: require-corp are set. Absent in jsdom/node.
+   */
+  crossOriginIsolated?: boolean;
 }
 
 export function detectBrowserCompat(
   env: CompatEnv = {
     // mediaDevices is absent entirely in insecure contexts.
     mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
-    wasm: WebAssembly as { Suspending?: unknown }
+    wasm: WebAssembly as { Suspending?: unknown },
+    crossOriginIsolated:
+      typeof globalThis === 'undefined' ? false : globalThis.crossOriginIsolated === true
   }
 ): BrowserCompat {
   const tabCapture = typeof env.mediaDevices?.getDisplayMedia === 'function';
   const jspi = typeof env.wasm?.Suspending === 'function';
+  const crossOriginIsolated = env.crossOriginIsolated === true;
   return {
     tabCapture: {
       supported: tabCapture,
@@ -51,6 +77,16 @@ export function detectBrowserCompat(
         ? null
         : 'WebAssembly JavaScript Promise Integration is unavailable — it needs Chrome/Edge ' +
           '137+ or Opera 121+.'
+    },
+    youtubeEmbed: {
+      supported: !crossOriginIsolated,
+      notice: crossOriginIsolated
+        ? 'This page is cross-origin isolated (Cross-Origin-Opener-Policy + ' +
+          'Cross-Origin-Embedder-Policy headers are set), which blocks the embedded ' +
+          'cross-origin YouTube player. LiveTranslate needs that iframe, so it runs ' +
+          'without cross-origin isolation — and therefore without SharedArrayBuffer or ' +
+          'multi-threaded WebAssembly. Remove the COOP/COEP headers from the deployment.'
+        : null
     }
   };
 }
