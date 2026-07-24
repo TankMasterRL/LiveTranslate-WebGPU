@@ -45,15 +45,52 @@ describe('AsrWorkerClient', () => {
     await expect(load).rejects.toThrow('weights 404');
   });
 
-  it('matches transcription results to calls by id, out of order', async () => {
+  it('serializes transcriptions so the worker never runs two at once', async () => {
+    // onnxruntime-web can't `run()` a session concurrently, and the worker's
+    // async onmessage would otherwise let a second transcribe interleave with
+    // the first. Only one chunk is handed to the worker at a time; the rest
+    // wait for its result before being posted.
     const { worker, client } = makeClient();
     const first = client.transcribe(new Float32Array([1]));
     const second = client.transcribe(new Float32Array([2]));
-    const ids = worker.posted.map((p) => (p.message as { id: number }).id);
-    worker.emit({ type: 'result', id: ids[1], text: 'two' });
-    worker.emit({ type: 'result', id: ids[0], text: 'one', segments: [] });
-    await expect(second).resolves.toEqual({ text: 'two', segments: undefined });
+
+    expect(worker.posted).toHaveLength(1);
+    const firstId = (worker.posted[0].message as { id: number }).id;
+
+    worker.emit({ type: 'result', id: firstId, text: 'one', segments: [] });
     await expect(first).resolves.toEqual({ text: 'one', segments: [] });
+
+    // The first result releases the second.
+    expect(worker.posted).toHaveLength(2);
+    const secondId = (worker.posted[1].message as { id: number }).id;
+    worker.emit({ type: 'result', id: secondId, text: 'two' });
+    await expect(second).resolves.toEqual({ text: 'two', segments: undefined });
+  });
+
+  it('releases the next queued transcription after a worker error', async () => {
+    // A failed transcription must free the slot too, or the queue would stall.
+    const { worker, client } = makeClient();
+    const first = client.transcribe(new Float32Array([1]));
+    const second = client.transcribe(new Float32Array([2]));
+    expect(worker.posted).toHaveLength(1);
+
+    const firstId = (worker.posted[0].message as { id: number }).id;
+    worker.emit({ type: 'error', id: firstId, message: 'inference blew up' });
+    await expect(first).rejects.toThrow('inference blew up');
+
+    expect(worker.posted).toHaveLength(2);
+    const secondId = (worker.posted[1].message as { id: number }).id;
+    worker.emit({ type: 'result', id: secondId, text: 'two' });
+    await expect(second).resolves.toEqual({ text: 'two', segments: undefined });
+  });
+
+  it('does not transfer a queued chunk’s buffer until it is actually posted', () => {
+    const { worker, client } = makeClient();
+    const held = new Float32Array([1, 2, 3]);
+    void client.transcribe(new Float32Array([9])); // occupies the worker
+    void client.transcribe(held); // queued — must not be transferred yet
+    expect(worker.posted).toHaveLength(1);
+    expect(held.buffer.byteLength).toBe(12); // still intact (not neutered)
   });
 
   it('passes an engine diagnostic notice through with the result', async () => {

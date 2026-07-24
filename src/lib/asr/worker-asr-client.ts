@@ -49,6 +49,18 @@ export class AsrWorkerClient implements AsrEngine {
   >();
   #readyResolvers: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
   #progress?: (fraction: number) => void;
+  /**
+   * Serialize transcriptions: onnxruntime-web can't `run()` a session
+   * concurrently, and the worker's async `onmessage` would otherwise let a
+   * second transcribe interleave with the first — the pipeline dispatches
+   * chunks fire-and-forget, so utterances overlap whenever the model runs
+   * slower than real time, and overlapping runs corrupt the shared sessions
+   * (garbage/empty decodes, "a few lines then nothing"). We post at most one
+   * transcribe to the worker and hold the rest — buffers included, so a queued
+   * chunk isn't transferred early — until its result/error returns.
+   */
+  #busy = false;
+  #queued: Array<() => void> = [];
 
   constructor(options: AsrWorkerClientOptions) {
     this.#loadExtras = options.loadExtras ?? {};
@@ -73,16 +85,32 @@ export class AsrWorkerClient implements AsrEngine {
     const id = ++this.#seq;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
-      // Transfer the buffer to avoid copying the PCM into the worker.
-      this.#worker.postMessage({ type: 'transcribe', id, audio, ...this.#transcribeExtras }, [
-        audio.buffer
-      ]);
+      // Transfer the buffer to avoid copying the PCM into the worker. The post
+      // is deferred (buffer untransferred) while the worker is busy.
+      const post = () =>
+        this.#worker.postMessage({ type: 'transcribe', id, audio, ...this.#transcribeExtras }, [
+          audio.buffer
+        ]);
+      if (this.#busy) this.#queued.push(post);
+      else {
+        this.#busy = true;
+        post();
+      }
     });
   }
 
   dispose(): void {
     this.#worker.terminate();
     this.#pending.clear();
+    this.#queued = [];
+    this.#busy = false;
+  }
+
+  /** A transcription finished (result or error): post the next queued one. */
+  #advance(): void {
+    const post = this.#queued.shift();
+    if (post) post();
+    else this.#busy = false;
   }
 
   #onMessage(message: AsrWorkerOutbound): void {
@@ -94,16 +122,27 @@ export class AsrWorkerClient implements AsrEngine {
       case 'ready':
         this.#readyResolvers.shift()?.resolve();
         break;
-      case 'result':
-        this.#pending
-          .get(message.id)
-          ?.resolve({ text: message.text, segments: message.segments, notice: message.notice });
-        this.#pending.delete(message.id);
+      case 'result': {
+        const settled = this.#pending.get(message.id);
+        if (settled) {
+          settled.resolve({
+            text: message.text,
+            segments: message.segments,
+            notice: message.notice
+          });
+          this.#pending.delete(message.id);
+          this.#advance();
+        }
         break;
+      }
       case 'error':
         if (message.id != null) {
-          this.#pending.get(message.id)?.reject(new Error(message.message));
-          this.#pending.delete(message.id);
+          const settled = this.#pending.get(message.id);
+          if (settled) {
+            settled.reject(new Error(message.message));
+            this.#pending.delete(message.id);
+            this.#advance();
+          }
         } else {
           // Model load failed: reject pending load() calls instead of hanging.
           this.#readyResolvers.shift()?.reject(new Error(message.message));
