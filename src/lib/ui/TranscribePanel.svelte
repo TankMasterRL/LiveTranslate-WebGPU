@@ -2,7 +2,8 @@
   import type { CaptureKind } from '$lib/audio/source';
   import type { VadEngineKind } from '$lib/audio/vad';
   import type { AsrEngineKind } from '$lib/asr/factory';
-  import { NEMOTRON_LOCALES } from '$lib/asr/nemotron/model';
+  import { NEMOTRON_CHUNK_SETTINGS, type NemotronChunkSetting } from '$lib/asr/nemotron/chunk-size';
+  import { NEMOTRON_LOCALES, NEMOTRON_NATIVE_CHUNK } from '$lib/asr/nemotron/model';
   import type { WebGPUSupport } from '$lib/asr/webgpu';
   import { nemotronSupport, WEBGPU_COMPAT_NOTICE, type BrowserCompat } from '$lib/compat';
   import type { TranscriptionPipeline } from '$lib/pipeline.svelte';
@@ -15,6 +16,7 @@
     vadEngine: VadEngineKind;
     asrEngine: AsrEngineKind;
     asrLanguage: string;
+    asrChunkMs: NemotronChunkSetting;
     onStart: () => void;
     onStop: () => void;
   }
@@ -27,9 +29,17 @@
     vadEngine = $bindable(),
     asrEngine = $bindable(),
     asrLanguage = $bindable(),
+    asrChunkMs = $bindable(),
     onStart,
     onStop
   }: Props = $props();
+
+  const chunkLabel = (setting: NemotronChunkSetting) => {
+    if (setting === 'auto') return 'Auto (adapt to load)';
+    return Number(setting) === NEMOTRON_NATIVE_CHUNK.ms
+      ? `${setting} ms (default)`
+      : `${setting} ms`;
+  };
 
   const status = $derived(pipeline?.status ?? 'idle');
   const busy = $derived(status === 'loading' || status === 'listening');
@@ -97,6 +107,15 @@
           {/each}
         </select>
       </label>
+
+      <label>
+        <span>Streaming chunk</span>
+        <select bind:value={asrChunkMs} disabled={busy}>
+          {#each NEMOTRON_CHUNK_SETTINGS as setting (setting)}
+            <option value={setting}>{chunkLabel(setting)}</option>
+          {/each}
+        </select>
+      </label>
     {/if}
 
     {#if status === 'listening'}
@@ -107,6 +126,14 @@
       </button>
     {/if}
   </div>
+
+  {#if asrEngine === 'nemotron'}
+    <p class="sub">
+      Streaming chunk = new audio per encoder step. Bigger steps re-upload the model's streaming
+      cache less often and give it more lookahead, so they transcribe faster here; Auto starts at
+      {NEMOTRON_NATIVE_CHUNK.ms} ms and widens whenever utterances queue up behind the model.
+    </p>
+  {/if}
 
   {#if webgpu && !webgpu.supported}
     <p class="sub warn">{WEBGPU_COMPAT_NOTICE}</p>

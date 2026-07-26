@@ -11,8 +11,10 @@ import type {
 /**
  * onnxruntime-web plumbing for the three Nemotron graphs, reduced to the
  * typed step calls the engine consumes. Tensor names and shapes follow the
- * export's genai_config.json:
- *   encoder: audio_signal [1,65,128] f32, length [1] i64,
+ * export's genai_config.json — except the encoder's time axis, which is the
+ * streaming chunk size the engine picked (65 = 9 + 56 mel rows at the
+ * export's native 560ms):
+ *   encoder: audio_signal [1,9+chunk,128] f32, length [1] i64,
  *            cache_last_channel [1,24,56,1024] f32,
  *            cache_last_time [1,24,1024,8] f32,
  *            cache_last_channel_len [1] i64, lang_id [1] i64
@@ -100,7 +102,6 @@ export async function createNemotronSessions(
   ]);
 
   const {
-    encoderInputFrames,
     nMels,
     encoderLayers,
     attentionCacheFrames,
@@ -112,8 +113,11 @@ export async function createNemotronSessions(
 
   return {
     async encode(input: EncoderStepInput): Promise<EncoderStepOutput> {
+      // The chunk size lives entirely in this one axis: the caches keep the
+      // same shapes at every operating point, which is why one export serves
+      // all of them.
       const result = await encoder.run({
-        audio_signal: f32(input.mel, [1, encoderInputFrames, nMels]),
+        audio_signal: f32(input.mel, [1, input.mel.length / nMels, nMels]),
         length: i64(input.validFrames),
         cache_last_channel: f32(input.cache.channel, [
           1,

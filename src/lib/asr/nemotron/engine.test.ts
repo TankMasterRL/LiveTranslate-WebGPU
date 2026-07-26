@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { NEMOTRON } from './model';
+import { CLEAN_UTTERANCES_BEFORE_STEP_DOWN } from './chunk-size';
+import { NEMOTRON, NEMOTRON_CHUNK_SIZES, NEMOTRON_NATIVE_CHUNK, nemotronChunkSize } from './model';
 import { NemotronEngine, type EncoderStepInput, type NemotronSessions } from './engine';
 
-const { nMels, newFrames, preEncodeCacheFrames, encoderInputFrames, dModel, blankId } = NEMOTRON;
+const { nMels, preEncodeCacheFrames, dModel, blankId } = NEMOTRON;
+const { newFrames, encoderInputFrames } = NEMOTRON_NATIVE_CHUNK;
+const LARGEST = NEMOTRON_CHUNK_SIZES[NEMOTRON_CHUNK_SIZES.length - 1];
 
 /** Fake extractor: one mel frame per `hop` samples, frame f filled with f+1. */
 function fakeExtractor(framesPerCall: (samples: Float32Array) => number) {
@@ -21,6 +24,8 @@ interface FakeOptions {
   emissions?: Record<number, number[]>;
   /** When set, the joint always returns this token (never blank). */
   stuckToken?: number;
+  /** Reject encoder steps whose input is not this many mel rows. */
+  onlyInputFrames?: number;
 }
 
 function makeFakes(options: FakeOptions = {}) {
@@ -33,6 +38,10 @@ function makeFakes(options: FakeOptions = {}) {
 
   const sessions: NemotronSessions = {
     async encode(input) {
+      const rows = input.mel.length / nMels;
+      if (options.onlyInputFrames !== undefined && rows !== options.onlyInputFrames) {
+        throw new Error(`invalid input shape [1,${rows},${nMels}]`);
+      }
       encodeCalls.push({
         ...input,
         mel: input.mel.slice(),
@@ -234,6 +243,100 @@ describe('NemotronEngine', () => {
     expect(first.notice).toBeUndefined();
     expect(second.notice).toBeUndefined();
     expect(third.notice).toMatch(/no text/i);
+  });
+
+  it('drives the encoder at a fixed chunk size when one is configured', async () => {
+    const chunk = nemotronChunkSize(160);
+    const { sessions, encodeCalls } = makeFakes();
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => chunk.newFrames * 2),
+      { chunkSetting: '160' }
+    );
+    await engine.transcribe(new Float32Array(1), undefined);
+
+    expect(engine.chunkMs).toBe(160);
+    expect(encodeCalls).toHaveLength(2);
+    expect(encodeCalls[0].mel.length).toBe(chunk.encoderInputFrames * nMels);
+    expect(encodeCalls[0].validFrames).toBe(chunk.encoderInputFrames);
+  });
+
+  it('grows the chunk for the very utterance that arrives with a backlog', async () => {
+    // The backlog says the pipeline captured speech this engine had no slot
+    // for; the response has to start with the utterance carrying the signal,
+    // not the one after it.
+    const { sessions, encodeCalls } = makeFakes();
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    await engine.transcribe(new Float32Array(1), undefined, 2);
+
+    expect(engine.chunkMs).toBeGreaterThan(NEMOTRON_NATIVE_CHUNK.ms);
+    expect(encodeCalls[0].mel.length / nMels).toBe(engine.chunkMs / 10 + preEncodeCacheFrames);
+  });
+
+  it('returns to the native chunk once the backlog stays clear', async () => {
+    const { sessions } = makeFakes();
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    await engine.transcribe(new Float32Array(1), undefined, 1);
+    for (let i = 0; i < CLEAN_UTTERANCES_BEFORE_STEP_DOWN; i++) {
+      await engine.transcribe(new Float32Array(1), undefined, 0);
+    }
+    expect(engine.chunkMs).toBe(NEMOTRON_NATIVE_CHUNK.ms);
+  });
+
+  it('retries the utterance at the native chunk when a wider step fails', async () => {
+    // The export is only known to accept its own 65-row input; a size it was
+    // not traced with must degrade to a working transcription, not an error.
+    const { sessions, encodeCalls } = makeFakes({
+      framesPerStep: 2,
+      emissions: { 0: [1, 3] },
+      onlyInputFrames: encoderInputFrames
+    });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames),
+      { chunkSetting: String(LARGEST.ms) as '1120' }
+    );
+
+    const result = await engine.transcribe(new Float32Array(1), undefined);
+    expect(result.text).toBe('hi.');
+    expect(result.notice).toMatch(/falling back to 560 ms/i);
+    expect(encodeCalls.every((call) => call.mel.length === encoderInputFrames * nMels)).toBe(true);
+    expect(engine.chunkMs).toBe(NEMOTRON_NATIVE_CHUNK.ms);
+  });
+
+  it('stops adapting after a chunk size has failed', async () => {
+    const { sessions } = makeFakes({ onlyInputFrames: encoderInputFrames });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames),
+      { chunkSetting: '1120' }
+    );
+    await engine.transcribe(new Float32Array(1), undefined);
+    await engine.transcribe(new Float32Array(1), undefined, 3);
+    expect(engine.chunkMs).toBe(NEMOTRON_NATIVE_CHUNK.ms);
+  });
+
+  it('propagates a failure at the native chunk size instead of looping', async () => {
+    const { sessions } = makeFakes({ onlyInputFrames: -1 });
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    await expect(engine.transcribe(new Float32Array(1), undefined)).rejects.toThrow(
+      /invalid input shape/
+    );
   });
 
   it('resets the silent-utterance count when a decode produces text', async () => {

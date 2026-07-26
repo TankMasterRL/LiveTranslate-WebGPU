@@ -84,6 +84,29 @@ describe('AsrWorkerClient', () => {
     await expect(second).resolves.toEqual({ text: 'two', segments: undefined });
   });
 
+  it('tells the worker how many utterances are queued behind each chunk', async () => {
+    // The queue depth at hand-over time is the pipeline's "not keeping up"
+    // signal — Nemotron picks its streaming chunk size from it.
+    const { worker, client } = makeClient();
+    const first = client.transcribe(new Float32Array([1]));
+    void client.transcribe(new Float32Array([2]));
+    void client.transcribe(new Float32Array([3]));
+
+    // Nothing had piled up when the first chunk went over.
+    expect(worker.posted[0].message.backlog).toBe(0);
+
+    // Releasing it hands over the second with the third still waiting.
+    const firstId = (worker.posted[0].message as { id: number }).id;
+    worker.emit({ type: 'result', id: firstId, text: 'one' });
+    await first;
+    expect(worker.posted[1].message.backlog).toBe(1);
+
+    const secondId = (worker.posted[1].message as { id: number }).id;
+    worker.emit({ type: 'result', id: secondId, text: 'two' });
+    await Promise.resolve();
+    expect(worker.posted[2].message.backlog).toBe(0);
+  });
+
   it('does not transfer a queued chunk’s buffer until it is actually posted', () => {
     const { worker, client } = makeClient();
     const held = new Float32Array([1, 2, 3]);

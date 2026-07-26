@@ -231,6 +231,7 @@
       bind:vadEngine
       bind:asrEngine={asrSettings.engine}
       bind:asrLanguage={asrSettings.language}
+      bind:asrChunkMs={asrSettings.nemotronChunkMs}
       onStart={startTranscription}
       onStop={stopTranscription}
     />

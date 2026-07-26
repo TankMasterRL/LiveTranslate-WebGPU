@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { cachedFetch } from '../model-cache';
 import type { AsrBackend } from '../pipeline.svelte';
+import type { NemotronChunkSetting } from './nemotron/chunk-size';
 import { NemotronEngine } from './nemotron/engine';
 import { NEMOTRON_FILES, nemotronFileUrl } from './nemotron/model';
 import { createNemotronSessions, type NemotronModelBytes } from './nemotron/session';
@@ -11,8 +12,15 @@ import { parseVocab } from './nemotron/tokenizer';
 // FastConformer-RNNT architecture, so this worker drives the three graphs
 // directly (the Silero-session approach, scaled up). Same postMessage
 // protocol as whisper-worker.ts — keep them mirrored.
-type LoadMessage = { type: 'load'; backend?: AsrBackend };
-type TranscribeMessage = { type: 'transcribe'; id: number; audio: Float32Array; language?: string };
+type LoadMessage = { type: 'load'; backend?: AsrBackend; chunkMs?: NemotronChunkSetting };
+type TranscribeMessage = {
+  type: 'transcribe';
+  id: number;
+  audio: Float32Array;
+  language?: string;
+  /** Utterances queued behind this one; drives the 'auto' chunk size. */
+  backlog?: number;
+};
 type InboundMessage = LoadMessage | TranscribeMessage;
 
 const ctx = self as unknown as Worker;
@@ -20,7 +28,7 @@ const ctx = self as unknown as Worker;
 let engine: NemotronEngine | null = null;
 let loading: Promise<void> | null = null;
 
-async function load(backend: AsrBackend): Promise<void> {
+async function load(backend: AsrBackend, chunkMs?: NemotronChunkSetting): Promise<void> {
   const host = import.meta.env.VITE_MODEL_HOST;
   const totalBytes = NEMOTRON_FILES.reduce((sum, file) => sum + file.bytes, 0);
 
@@ -55,14 +63,14 @@ async function load(backend: AsrBackend): Promise<void> {
   };
   const vocab = parseVocab(new TextDecoder().decode(part('vocab.txt')));
   const sessions = await createNemotronSessions(modelBytes, backend);
-  engine = new NemotronEngine(sessions, vocab);
+  engine = new NemotronEngine(sessions, vocab, undefined, { chunkSetting: chunkMs });
 }
 
 ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
   const message = event.data;
   try {
     if (message.type === 'load') {
-      loading ??= load(message.backend ?? 'webgpu');
+      loading ??= load(message.backend ?? 'webgpu', message.chunkMs);
       await loading;
       ctx.postMessage({ type: 'ready' });
       return;
@@ -70,7 +78,11 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
 
     if (message.type === 'transcribe') {
       if (!engine) throw new Error('Nemotron model is not loaded yet.');
-      const { text, segments, notice } = await engine.transcribe(message.audio, message.language);
+      const { text, segments, notice } = await engine.transcribe(
+        message.audio,
+        message.language,
+        message.backlog ?? 0
+      );
       ctx.postMessage({ type: 'result', id: message.id, text, segments, notice });
     }
   } catch (err) {

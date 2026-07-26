@@ -87,10 +87,22 @@ export class AsrWorkerClient implements AsrEngine {
       this.#pending.set(id, { resolve, reject });
       // Transfer the buffer to avoid copying the PCM into the worker. The post
       // is deferred (buffer untransferred) while the worker is busy.
+      //
+      // `backlog` is how many utterances are still waiting behind this one at
+      // the moment it is handed over: captured speech the engine had no slot
+      // for, i.e. the pipeline running slower than real time. Advisory — the
+      // Whisper worker ignores it; Nemotron sizes its streaming chunk by it.
       const post = () =>
-        this.#worker.postMessage({ type: 'transcribe', id, audio, ...this.#transcribeExtras }, [
-          audio.buffer
-        ]);
+        this.#worker.postMessage(
+          {
+            type: 'transcribe',
+            id,
+            audio,
+            backlog: this.#queued.length,
+            ...this.#transcribeExtras
+          },
+          [audio.buffer]
+        );
       if (this.#busy) this.#queued.push(post);
       else {
         this.#busy = true;
