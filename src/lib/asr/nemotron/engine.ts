@@ -1,5 +1,6 @@
 import type { AsrResult } from '../transcript';
-import { NEMOTRON, nemotronLangId } from './model';
+import { ChunkSizeController, type NemotronChunkSetting } from './chunk-size';
+import { NEMOTRON, nemotronLangId, type NemotronChunkSize } from './model';
 import { LogMelExtractor } from './features';
 import { decodeUtterance, type EmittedToken } from './tokenizer';
 
@@ -7,10 +8,12 @@ import { decodeUtterance, type EmittedToken } from './tokenizer';
  * Cache-aware streaming RNN-T greedy decoding for Nemotron 3.5 ASR. The
  * pipeline hands us one VAD utterance at a time (the AsrEngine seam), and we
  * run the model's native streaming interface *within* the utterance: fresh
- * caches per utterance, then 560ms encoder steps that reuse the attention and
- * conv caches from the previous step, exactly as the export was optimized
- * for. The three ONNX sessions are injected as typed step functions so this
- * whole file is unit-testable without onnxruntime.
+ * caches per utterance, then encoder steps that reuse the attention and conv
+ * caches from the previous step, exactly as the export was optimized for. The
+ * step size is one of the model's streaming operating points, fixed by
+ * setting or picked from the utterance backlog (see ChunkSizeController). The
+ * three ONNX sessions are injected as typed step functions so this whole file
+ * is unit-testable without onnxruntime.
  */
 
 export interface EncoderCache {
@@ -23,7 +26,7 @@ export interface EncoderCache {
 }
 
 export interface EncoderStepInput {
-  /** [encoderInputFrames, nMels] row-major; invalid rows zeroed. */
+  /** [chunk.encoderInputFrames, nMels] row-major; invalid rows zeroed. */
   mel: Float32Array;
   /** Rows actually populated (pre-encode cache + new frames). */
   validFrames: number;
@@ -63,28 +66,96 @@ function argmax(logits: Float32Array): number {
 /** Silent utterances tolerated before the engine reports itself as stuck. */
 const SILENT_UTTERANCES_BEFORE_NOTICE = 3;
 
+export interface NemotronEngineOptions {
+  /**
+   * Streaming chunk size: a fixed operating point in milliseconds, or 'auto'
+   * to follow the utterance backlog. Defaults to 'auto'.
+   */
+  chunkSetting?: NemotronChunkSetting;
+}
+
 export class NemotronEngine {
   readonly #sessions: NemotronSessions;
   readonly #vocab: string[];
   readonly #extractor: Pick<LogMelExtractor, 'frames'>;
+  readonly #chunks: ChunkSizeController;
   #silentUtterances = 0;
 
   constructor(
     sessions: NemotronSessions,
     vocab: string[],
-    extractor: Pick<LogMelExtractor, 'frames'> = new LogMelExtractor()
+    extractor: Pick<LogMelExtractor, 'frames'> = new LogMelExtractor(),
+    options: NemotronEngineOptions = {}
   ) {
     this.#sessions = sessions;
     this.#vocab = vocab;
     this.#extractor = extractor;
+    this.#chunks = new ChunkSizeController(options.chunkSetting);
   }
 
-  async transcribe(audio: Float32Array, language: string | undefined): Promise<AsrResult> {
+  /** The chunk size the next utterance will be decoded at. */
+  get chunkMs(): number {
+    return this.#chunks.current.ms;
+  }
+
+  /**
+   * Decode one VAD utterance. `backlog` is how many utterances were already
+   * waiting behind this one when it was handed over — the pipeline's "we are
+   * not keeping up" signal, which in 'auto' picks the chunk size for this and
+   * later utterances.
+   */
+  async transcribe(
+    audio: Float32Array,
+    language: string | undefined,
+    backlog = 0
+  ): Promise<AsrResult> {
+    this.#chunks.observe(backlog);
+
+    const mel = this.#extractor.frames(audio);
+    if (mel.length === 0) return { text: '', segments: [] };
+
+    const langId = nemotronLangId(language);
+    let fallbackNotice: string | undefined;
+    let emitted: EmittedToken[];
+    try {
+      emitted = await this.#decode(mel, langId, this.#chunks.current);
+    } catch (err) {
+      // Only a non-native chunk size can fail for reasons a retry fixes: the
+      // export could refuse a time axis it was not traced with, or a longer
+      // step's activations could exceed what the device will allocate. Both
+      // fail on the very first step, so re-running the utterance at the size
+      // the export ships for costs one wasted step and keeps the engine
+      // usable; a native-size failure is real and propagates.
+      const failedMs = this.#chunks.current.ms;
+      if (!this.#chunks.pinToNative()) throw err;
+      const detail = err instanceof Error ? err.message : String(err);
+      fallbackNotice =
+        `Nemotron's ${failedMs} ms streaming chunk failed (${detail}) — ` +
+        `falling back to ${this.#chunks.current.ms} ms for the rest of this session.`;
+      emitted = await this.#decode(mel, langId, this.#chunks.current);
+    }
+
+    const { text, segments } = decodeUtterance(emitted, this.#vocab);
+    // Diagnose unconditionally — it carries the silent-utterance count — but
+    // let the fallback speak first when both have something to say.
+    const diagnosis = this.#diagnoseEmptyDecode(text, emitted.length);
+    const notice = fallbackNotice ?? diagnosis;
+    return notice ? { text, segments, notice } : { text, segments };
+  }
+
+  /**
+   * Run the cache-aware streaming loop over one utterance's mel frames at
+   * `chunk`. Caches are local to the call, so a failed run leaves no state
+   * behind and the utterance can simply be re-run at another chunk size.
+   */
+  async #decode(
+    mel: Float32Array[],
+    langId: number,
+    chunk: NemotronChunkSize
+  ): Promise<EmittedToken[]> {
     const {
       nMels,
-      newFrames,
       preEncodeCacheFrames,
-      encoderInputFrames,
       attentionCacheFrames,
       convCacheFrames,
       encoderLayers,
@@ -95,11 +166,8 @@ export class NemotronEngine {
       maxSymbolsPerStep,
       encodedFrameMs
     } = NEMOTRON;
+    const { newFrames, encoderInputFrames } = chunk;
 
-    const mel = this.#extractor.frames(audio);
-    if (mel.length === 0) return { text: '', segments: [] };
-
-    const langId = nemotronLangId(language);
     let cache: EncoderCache = {
       channel: new Float32Array(encoderLayers * attentionCacheFrames * dModel),
       time: new Float32Array(encoderLayers * dModel * convCacheFrames),
@@ -121,7 +189,7 @@ export class NemotronEngine {
     for (let step = 0; step < steps; step++) {
       const base = step * newFrames;
       // Every step re-feeds the previous 9 mel frames (the pre-encode cache;
-      // zeros before the utterance starts) followed by up to 56 new ones.
+      // zeros before the utterance starts) followed by the chunk's new ones.
       const buffer = new Float32Array(encoderInputFrames * nMels);
       for (let row = 0; row < encoderInputFrames; row++) {
         const melIndex = base - preEncodeCacheFrames + row;
@@ -151,10 +219,7 @@ export class NemotronEngine {
         globalFrame++;
       }
     }
-
-    const { text, segments } = decodeUtterance(emitted, this.#vocab);
-    const notice = this.#diagnoseEmptyDecode(text, emitted.length);
-    return notice ? { text, segments, notice } : { text, segments };
+    return emitted;
   }
 
   /**

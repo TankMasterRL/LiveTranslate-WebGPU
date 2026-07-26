@@ -131,12 +131,41 @@ Two engines in the **Live transcription** panel's _Recognition model_ select:
   native WebGPU execution provider (`onnxruntime-web/jspi`), which needs
   WebAssembly JSPI — Chrome/Edge 137 or later; on older browsers the load
   fails with a message suggesting Whisper instead. Each VAD utterance is fed
-  through the model's native 560 ms streaming interface with carried encoder
-  caches, and greedy
+  through the model's streaming interface with carried encoder caches, and greedy
   RNN-T emission frames give cues true timestamps. A _Spoken language_ select
   (visible when Nemotron is chosen) conditions the model on a locale via its
   prompt dictionary; _Auto-detect_ lets the model identify the language itself.
   All six model files are integrity-pinned by SHA-256, like the Silero VAD.
+
+### Streaming chunk size
+
+The model card exposes five streaming operating points — 80, 160, 320, 560 and
+1120 ms of new audio per encoder step (`att_context_size = [56, r]`,
+r ∈ {0,1,3,6,13}) — and they all share one export: the attention, conv and
+pre-encode caches have identical shapes at every point, so the chunk size is a
+pure runtime knob. The _Streaming chunk_ select (next to _Spoken language_)
+picks one, and takes effect on the next **Start transcription**.
+
+It is not a latency control here. The pipeline hands the worker one VAD
+utterance at a time, so every step of an utterance runs before its cue is
+committed; what the chunk size changes is the cost per second of audio. Each
+step re-uploads and reads back the whole ~6 MB streaming cache, so doubling the
+chunk roughly halves that traffic — and wider chunks also give the model more
+lookahead (the card's FLEURS WER improves with chunk size). The small sizes are
+therefore the expensive end: they exist to compare the model's low-latency
+operating points, and to keep a wide chunk from zero-padding very short
+utterances.
+
+**Auto** (the default) sets it from the utterance backlog. Transcriptions are
+serialized — onnxruntime-web can't run a session concurrently — so when the
+model runs slower than real time, utterances queue up behind it and cues arrive
+late. Each `transcribe` message carries the queue depth it was handed over
+with; a non-zero backlog widens the chunk immediately, and four consecutive
+backlog-free utterances give a step back. Auto never goes below 560 ms, where
+the cost per second of audio only rises. If a step ever fails at a
+non-default size — the export refusing a time axis it wasn't traced with, or a
+device that won't allocate the wider activations — the engine retries that same
+utterance at 560 ms and pins itself there for the rest of the session.
 
 ## Translation
 

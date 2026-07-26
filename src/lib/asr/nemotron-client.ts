@@ -1,3 +1,4 @@
+import type { NemotronChunkSetting } from './nemotron/chunk-size';
 import { AsrWorkerClient } from './worker-asr-client';
 
 export interface NemotronClientOptions {
@@ -7,6 +8,11 @@ export interface NemotronClientOptions {
    * language itself.
    */
   language?: string;
+  /**
+   * Streaming chunk size: one of the model's operating points in ms, or
+   * 'auto' (the default) to follow the utterance backlog at runtime.
+   */
+  chunkMs?: NemotronChunkSetting;
 }
 
 /**
@@ -20,6 +26,7 @@ export class NemotronClient extends AsrWorkerClient {
     super({
       createWorker: () =>
         new Worker(new URL('./nemotron-worker.ts', import.meta.url), { type: 'module' }),
+      loadExtras: { chunkMs: options.chunkMs },
       transcribeExtras: { language: options.language }
     });
   }

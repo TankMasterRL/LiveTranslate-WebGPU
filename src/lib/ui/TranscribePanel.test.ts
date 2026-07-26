@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
+import { NEMOTRON_CHUNK_SETTINGS } from '../asr/nemotron/chunk-size';
 import { WEBGPU_COMPAT_NOTICE, type BrowserCompat } from '../compat';
+import type { TranscriptionPipeline } from '../pipeline.svelte';
 import TranscribePanel from './TranscribePanel.svelte';
 
 const SUPPORTED_COMPAT: BrowserCompat = {
@@ -17,6 +19,7 @@ const baseProps = {
   vadEngine: 'energy' as const,
   asrEngine: 'whisper' as const,
   asrLanguage: 'auto',
+  asrChunkMs: 'auto' as const,
   onStart: () => {},
   onStop: () => {}
 };
@@ -48,6 +51,33 @@ describe('TranscribePanel', () => {
     expect(options[0]).toBe('auto');
     expect(options).toContain('de-DE');
     expect(options.length).toBeGreaterThan(30);
+  });
+
+  it('hides the streaming-chunk select while Whisper is active', () => {
+    render(TranscribePanel, { props: { ...baseProps } });
+    expect(screen.queryByLabelText(/streaming chunk/i)).toBeNull();
+  });
+
+  it('offers auto plus every Nemotron chunk size, auto first', () => {
+    render(TranscribePanel, { props: { ...baseProps, asrEngine: 'nemotron' as const } });
+    const select = screen.getByLabelText(/streaming chunk/i);
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(options).toEqual([...NEMOTRON_CHUNK_SETTINGS]);
+    expect(screen.getByRole('option', { name: /560 ms \(default\)/i })).toBeInTheDocument();
+  });
+
+  it('locks the streaming-chunk select while a session is running', () => {
+    // The size is baked into the worker at load, so it can only change
+    // between sessions (the same rule as the engine and language selects).
+    const pipeline = { status: 'listening', level: 0, progress: 0 };
+    render(TranscribePanel, {
+      props: {
+        ...baseProps,
+        asrEngine: 'nemotron' as const,
+        pipeline: pipeline as unknown as TranscriptionPipeline
+      }
+    });
+    expect(screen.getByLabelText(/streaming chunk/i)).toBeDisabled();
   });
 
   it('starts transcription from the start button', async () => {

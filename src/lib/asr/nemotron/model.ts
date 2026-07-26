@@ -76,9 +76,10 @@ export const NEMOTRON_FILES: readonly NemotronFile[] = [
 
 /**
  * Architecture constants from the export's genai_config.json. The export is
- * optimized for the 560ms chunk size: each encoder step consumes 56 new mel
- * frames (10ms hop) plus a 9-frame pre-encode cache, and emits ~7 encoded
- * frames (8x subsampling → one encoded frame per 80ms of audio).
+ * shipped for the 560ms chunk size (`chunk_samples: 8960`): each encoder step
+ * consumes 56 new mel frames (10ms hop) plus a 9-frame pre-encode cache, and
+ * emits 7 encoded frames (8x subsampling → one encoded frame per 80ms of
+ * audio). The chunk size itself is a runtime knob — see NEMOTRON_CHUNK_SIZES.
  */
 export const NEMOTRON = {
   sampleRate: 16_000,
@@ -99,8 +100,6 @@ export const NEMOTRON = {
    * below anything the model saw in training.
    */
   logGuard: 2 ** -24,
-  /** Mel frames consumed per streaming encoder step (560ms). */
-  newFrames: 56,
   /** Mel frames of pre-encode cache prepended to every step's input. */
   preEncodeCacheFrames: 9,
   /** Encoder attention-cache length (frames kept in cache_last_channel). */
@@ -118,12 +117,70 @@ export const NEMOTRON = {
   /** Milliseconds of audio represented by one encoded frame. */
   get encodedFrameMs(): number {
     return (this.subsamplingFactor * this.hopLength * 1000) / this.sampleRate;
-  },
-  /** Mel frames fed to the encoder per step (cache + new). */
-  get encoderInputFrames(): number {
-    return this.preEncodeCacheFrames + this.newFrames;
   }
 } as const;
+
+/** One streaming operating point: how much new audio an encoder step eats. */
+export interface NemotronChunkSize {
+  /** New audio consumed per encoder step, in milliseconds. */
+  ms: number;
+  /** Encoded frames the step emits — the model card's "chunk size". */
+  encodedFrames: number;
+  /** New mel frames consumed per step. */
+  newFrames: number;
+  /** Mel rows fed to the encoder per step (pre-encode cache + new). */
+  encoderInputFrames: number;
+}
+
+function chunkSize(encodedFrames: number): NemotronChunkSize {
+  const newFrames = encodedFrames * NEMOTRON.subsamplingFactor;
+  return {
+    ms: encodedFrames * NEMOTRON.encodedFrameMs,
+    encodedFrames,
+    newFrames,
+    encoderInputFrames: NEMOTRON.preEncodeCacheFrames + newFrames
+  };
+}
+
+/**
+ * The size the export ships tuned for (genai_config.json `chunk_samples`:
+ * 8960 samples = 560ms = 7 encoded frames), and the only one every runtime
+ * that reads that config uses. Everything else is opt-in.
+ */
+export const NEMOTRON_NATIVE_CHUNK: NemotronChunkSize = chunkSize(7);
+
+/**
+ * The streaming operating points the model exposes at inference time, from
+ * the base model card ("Setting up Streaming Configuration"):
+ * `att_context_size = [56, r]` with right context r ∈ {0,1,3,6,13}, giving a
+ * chunk of r+1 encoded frames of 80ms each. The left context (56 encoded
+ * frames), the conv cache (8) and the pre-encode cache (9 mel frames) are
+ * identical at every point, so one export and one set of cache tensor shapes
+ * serve all five — the chunk size is a pure runtime knob, no re-export and no
+ * re-training ("Dynamic Runtime Flexibility" on the card).
+ *
+ * In this port the chunk size is *not* a latency knob: the pipeline hands the
+ * engine one VAD utterance at a time, so every step of an utterance runs
+ * before its cue is committed. What it changes is cost per second of audio —
+ * each step re-uploads and reads back the whole ~6MB streaming cache, so
+ * doubling the chunk roughly halves that traffic — and how much lookahead the
+ * model gets (the card's FLEURS WER improves as the chunk grows). Smaller
+ * chunks are therefore the expensive end here, worth picking only to compare
+ * the model's low-latency operating points or to stop a long chunk from
+ * zero-padding short utterances.
+ */
+export const NEMOTRON_CHUNK_SIZES: readonly NemotronChunkSize[] = [
+  chunkSize(1),
+  chunkSize(2),
+  chunkSize(4),
+  NEMOTRON_NATIVE_CHUNK,
+  chunkSize(14)
+];
+
+/** Resolve a chunk size in ms; anything unsupported degrades to the native one. */
+export function nemotronChunkSize(ms: number): NemotronChunkSize {
+  return NEMOTRON_CHUNK_SIZES.find((chunk) => chunk.ms === ms) ?? NEMOTRON_NATIVE_CHUNK;
+}
 
 /** Prompt id that lets the model detect the language itself. */
 export const NEMOTRON_AUTO_LANG_ID = 101;
