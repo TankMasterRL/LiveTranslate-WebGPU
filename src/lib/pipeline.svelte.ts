@@ -185,12 +185,16 @@ export class TranscriptionPipeline {
 
     // Earlier segments keep their true (past) spans for the transcript; the
     // last one also stays on screen long enough to read — sized by what is
-    // actually shown (the translation when present).
+    // actually shown (the translation when present), and measured from now,
+    // when it is committed: ASR and translation latency must not eat into
+    // the reading time, or a slow enough line is committed already expired
+    // and never appears on the overlay at all.
+    const committedMs = this.#deps.nowMs();
     const last = cues[cues.length - 1];
     last.endMs =
       this.#fixedDisplayMs !== undefined
-        ? emissionMs + this.#fixedDisplayMs
-        : Math.max(last.endMs, emissionMs + cueDisplayMs(displayText(last)));
+        ? committedMs + this.#fixedDisplayMs
+        : Math.max(last.endMs, committedMs + cueDisplayMs(displayText(last)));
 
     for (const cue of cues) this.#deps.track.commit(cue);
   }

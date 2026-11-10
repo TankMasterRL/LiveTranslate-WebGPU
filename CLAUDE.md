@@ -44,7 +44,7 @@ Svelte 5 runes classes live in `.svelte.ts` files (`SubtitleTrack`, `YouTubePlay
 
 ### Timing semantics (subtle, tested)
 
-Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance chunk emitted "now" is **backdated** by its audio duration; Whisper segments (from `return_timestamps`) become individual true-timed cues; only the **last** cue of an utterance gets its `endMs` extended to reading time (`cueDisplayMs`, ~70ms/char clamped 1.8–7s, computed from the _displayed_ text — the translation if present). `SileroVad.process()` is synchronous by returning the previous frame's decision while queueing async inference (one 32ms frame of lag, absorbed by the hangover).
+Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance chunk emitted "now" is **backdated** by its audio duration; Whisper segments (from `return_timestamps`) become individual true-timed cues; only the **last** cue of an utterance gets its `endMs` extended to reading time (`cueDisplayMs`, ~70ms/char clamped 1.8–7s, computed from the _displayed_ text — the translation if present), measured from when the cue is **committed**, not from emission — otherwise ASR + translation latency eats the reading time and a slow line is committed already expired, never reaching the overlay. `SileroVad.process()` is synchronous by returning the previous frame's decision while queueing async inference (one 32ms frame of lag, absorbed by the hangover).
 
 ## Hard constraints (these explain non-obvious code)
 

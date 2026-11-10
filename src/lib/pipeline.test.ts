@@ -114,6 +114,61 @@ describe('TranscriptionPipeline', () => {
     expect(track.cues[1].endMs).toBe(clock + 1800);
   });
 
+  it('measures the reading window from when the cue is committed, so slow translation cannot expire it', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let clock = 10_000;
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      asr: asrOf(() => ({ text: 'hola' })),
+      translator: {
+        translate: async (t) => {
+          clock += 5_000; // translation outlasts the 1.8s minimum reading time
+          return `EN:${t}`;
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    // Still starts when it was spoken...
+    expect(track.cues[0].startMs).toBe(10_000 - CHUNK_MS);
+    // ...but is readable for its full reading time once it finally appears,
+    // instead of being committed already expired.
+    expect(track.cues[0].endMs).toBe(15_000 + 1800);
+    expect(track.activeAt(15_000)).toBe(track.cues[0]);
+  });
+
+  it('applies a fixed displayMs from commit time too, covering ASR latency', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let clock = 10_000;
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      displayMs: 4000,
+      asr: {
+        load: vi.fn().mockResolvedValue(undefined),
+        transcribe: async () => {
+          clock += 3_000;
+          return { text: 'hola' };
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(track.cues[0].startMs).toBe(10_000 - CHUNK_MS);
+    expect(track.cues[0].endMs).toBe(13_000 + 4000);
+  });
+
   it('swaps the translator at runtime without restarting capture', async () => {
     const track = new SubtitleTrack();
     const capture = makeFakeCapture();
