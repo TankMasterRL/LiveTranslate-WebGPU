@@ -183,6 +183,9 @@ Three modes in the **Translation** panel (default: off, transcribe-only):
 
 Settings apply live via `pipeline.setTranslator(...)` — no need to restart capture.
 Translation is best-effort: if it fails, the untranslated transcription still shows.
+Each utterance is translated as one line, one at a time; if the translator falls
+behind the speech, a line that has waited more than ~3 s is shown untranslated
+(with a notice) rather than letting every later subtitle arrive later and later.
 
 ## Testing (red/green TDD)
 

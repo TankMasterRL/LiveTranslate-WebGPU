@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { segmentsToCues } from './align';
+import { segmentsToCues, utteranceToCue } from './align';
 import type { AsrResult } from './transcript';
 
 const opts = { utteranceStartMs: 1000, utteranceDurationMs: 500 };
@@ -57,5 +57,58 @@ describe('segmentsToCues', () => {
   it('returns nothing for blank results', () => {
     expect(segmentsToCues({ text: '<|endoftext|>' }, opts)).toEqual([]);
     expect(segmentsToCues({ text: '  ', segments: [] }, opts)).toEqual([]);
+  });
+});
+
+describe('utteranceToCue', () => {
+  it('joins a multi-segment utterance into one cue spanning all of its segments', () => {
+    const result: AsrResult = {
+      text: ' I went to the store, and bought milk.',
+      segments: [
+        { text: ' I went to the store,', startMs: 0, endMs: 200 },
+        { text: ' and bought milk.', startMs: 200, endMs: 450 }
+      ]
+    };
+    const cue = utteranceToCue(result, opts);
+    // The whole sentence, as recognized — not the fragments re-glued.
+    expect(cue).toMatchObject({
+      text: 'I went to the store, and bought milk.',
+      startMs: 1000,
+      endMs: 1450
+    });
+  });
+
+  it('keeps the recognized spacing of languages written without spaces', () => {
+    const result: AsrResult = {
+      text: '我去了商店买牛奶',
+      segments: [
+        { text: '我去了商店', startMs: 0, endMs: 200 },
+        { text: '买牛奶', startMs: 200, endMs: null }
+      ]
+    };
+    expect(utteranceToCue(result, opts)?.text).toBe('我去了商店买牛奶');
+  });
+
+  it('joins the segment texts when the full text is missing', () => {
+    const result: AsrResult = {
+      text: '',
+      segments: [
+        { text: ' one', startMs: 0, endMs: 100 },
+        { text: ' two', startMs: 100, endMs: 200 }
+      ]
+    };
+    expect(utteranceToCue(result, opts)?.text).toBe('one two');
+  });
+
+  it('returns a segment-less utterance as its single full-span cue', () => {
+    expect(utteranceToCue({ text: ' hola ' }, opts)).toMatchObject({
+      text: 'hola',
+      startMs: 1000,
+      endMs: 1500
+    });
+  });
+
+  it('returns null for a blank utterance', () => {
+    expect(utteranceToCue({ text: '<|0.00|>  ' }, opts)).toBeNull();
   });
 });

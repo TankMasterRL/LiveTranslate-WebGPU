@@ -46,6 +46,8 @@ Svelte 5 runes classes live in `.svelte.ts` files (`SubtitleTrack`, `YouTubePlay
 
 Cue timestamps are on the _media timeline_ (`player.currentMs`). An utterance chunk emitted "now" is **backdated** by its audio duration; Whisper segments (from `return_timestamps`) become individual true-timed cues; only the **last** cue of an utterance gets its `endMs` extended to reading time (`cueDisplayMs`, ~70ms/char clamped 1.8–7s, computed from the _displayed_ text — the translation if present), measured from when the cue is **committed**, not from emission — otherwise ASR + translation latency eats the reading time and a slow line is committed already expired, never reaching the overlay. `SileroVad.process()` is synchronous by returning the previous frame's decision while queueing async inference (one 32ms frame of lag, absorbed by the hangover).
 
+With a translator active, an utterance is committed as **one** cue (`utteranceToCue`, segments joined) and translated whole — fragments translate incoherently and a translation can't be re-split. Translations run strictly one at a time through `SerialQueue` (`translate/serial-queue.ts`), the translation-side analog of the ASR client's serialization: a line that waits longer than `maxTranslationWaitMs` (media time, default 3s) is committed untranslated with a "falling behind" notice instead, so a translator slower than real time costs some lines their translation rather than growing an unbounded backlog. The notice is retracted when a line next reaches an idle queue.
+
 ## Hard constraints (these explain non-obvious code)
 
 - **A cross-origin YouTube iframe's audio cannot be read.** Transcription requires sharing tab/system audio (`getDisplayMedia`, WASAPI-loopback analog) or the mic. Don't try to tap the embed.
