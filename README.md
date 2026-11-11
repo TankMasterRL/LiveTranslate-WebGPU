@@ -172,10 +172,16 @@ utterance at 560 ms and pins itself there for the rest of the session.
 Three modes in the **Translation** panel (default: off, transcribe-only):
 
 - **Local model (WebGPU)** — translation runs entirely in your browser:
-  - _Auto → English_ uses `Xenova/opus-mt-mul-en` (~50 MB, fast, any source).
-  - Any other pair uses `Xenova/nllb-200-distilled-600M` (~600 MB q8, 12 curated
-    languages) and needs an explicit source language — Whisper doesn't reliably
-    report what it heard.
+  - _Auto → English_ uses `Xenova/opus-mt-mul-en` (fast, any source).
+  - Any other pair uses `Xenova/nllb-200-distilled-600M` (12 curated languages)
+    and needs an explicit source language — Whisper doesn't reliably report what
+    it heard.
+  - Precision follows the GPU: **fp16 on WebGPU** when the adapter supports
+    `shader-f16` (~220 MB opus-mt / ~1.8 GB NLLB), otherwise **q8 on WASM**
+    (~110 MB / ~900 MB). q8 never runs on WebGPU: its quantized matmuls have no
+    WebGPU kernels and would bounce through the CPU on every generated token.
+  - Output is capped at about twice the source length and repeated 4-grams are
+    banned, so a garbled input can't decode hundreds of tokens of loop.
   - Weights download once and are browser-cached.
 - **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
   chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
