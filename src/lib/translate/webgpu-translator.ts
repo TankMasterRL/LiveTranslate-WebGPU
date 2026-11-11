@@ -34,7 +34,8 @@ export interface WebGpuTranslatorOptions {
  */
 export class WebGpuTranslator implements Translator {
   readonly #worker: TranslateWorkerLike;
-  readonly #choice: Extract<LocalModelChoice, { ok: true }>;
+  readonly #model: string;
+  #languages: { srcCode?: string; tgtCode?: string };
   readonly #detect: () => Promise<WebGPUSupport>;
   #seq = 0;
   #pending = new Map<number, { resolve: (text: string) => void; reject: (e: Error) => void }>();
@@ -49,7 +50,8 @@ export class WebGpuTranslator implements Translator {
     choice: Extract<LocalModelChoice, { ok: true }>,
     options: WebGpuTranslatorOptions = {}
   ) {
-    this.#choice = choice;
+    this.#model = choice.model;
+    this.#languages = { srcCode: choice.srcCode, tgtCode: choice.tgtCode };
     this.#detect = options.detect ?? (() => detectWebGPU());
     this.#worker = (
       options.createWorker ??
@@ -71,10 +73,24 @@ export class WebGpuTranslator implements Translator {
     this.#progress = callback;
   }
 
+  /** True once the worker crashed or was disposed: this translator can never work again. */
+  get defunct(): boolean {
+    return this.#failure !== null;
+  }
+
+  /**
+   * Retarget the loaded model to another language pair (NLLB takes the pair
+   * per request) — no reload. Applies to translations requested from now on.
+   */
+  setLanguages(languages: { srcCode?: string; tgtCode?: string }): void {
+    this.#languages = { srcCode: languages.srcCode, tgtCode: languages.tgtCode };
+  }
+
   /**
    * Download and initialize the model. Idempotent; translate() calls it
    * implicitly, but calling it up front keeps the first utterances from
-   * waiting out the whole download.
+   * waiting out the whole download. A failed load is forgotten, so the next
+   * call retries it (the worker does likewise) rather than failing forever.
    */
   load(): Promise<void> {
     this.#loaded ??= (async () => {
@@ -83,9 +99,12 @@ export class WebGpuTranslator implements Translator {
         if (this.#failure) return reject(this.#failure);
         this.#readyResolve = resolve;
         this.#readyReject = reject;
-        this.#worker.postMessage({ type: 'load', model: this.#choice.model, backend, dtype });
+        this.#worker.postMessage({ type: 'load', model: this.#model, backend, dtype });
       });
-    })();
+    })().catch((err: unknown) => {
+      this.#loaded = null;
+      throw err;
+    });
     return this.#loaded;
   }
 
@@ -99,8 +118,8 @@ export class WebGpuTranslator implements Translator {
         type: 'translate',
         id,
         text,
-        srcCode: this.#choice.srcCode,
-        tgtCode: this.#choice.tgtCode
+        srcCode: this.#languages.srcCode,
+        tgtCode: this.#languages.tgtCode
       });
     });
   }

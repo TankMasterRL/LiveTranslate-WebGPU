@@ -138,4 +138,48 @@ describe('WebGpuTranslator', () => {
     worker.emit({ type: 'error', message: 'weights 404' });
     await expect(result).rejects.toThrow('weights 404');
   });
+
+  it('retries a failed load on the next call instead of replaying the failure', async () => {
+    // Pooled translators outlive a failed download (a network blip), so the
+    // next Apply must try again rather than fail forever.
+    const { worker, translator } = makeTranslator();
+    const failed = translator.load();
+    await settle();
+    worker.emit({ type: 'error', message: 'network error' });
+    await expect(failed).rejects.toThrow('network error');
+
+    const retry = translator.load();
+    await settle();
+    expect(worker.ofType('load')).toHaveLength(2);
+    worker.emit({ type: 'ready' });
+    await expect(retry).resolves.toBeUndefined();
+  });
+
+  it('switches language pair on the loaded model without reloading it', async () => {
+    const { worker, translator } = makeTranslator();
+    void translator.load();
+    await settle();
+    worker.emit({ type: 'ready' });
+
+    translator.setLanguages({ srcCode: 'fra_Latn', tgtCode: 'deu_Latn' });
+    void translator.translate('bonjour');
+    await settle();
+
+    expect(worker.ofType('translate')[0]).toMatchObject({
+      srcCode: 'fra_Latn',
+      tgtCode: 'deu_Latn'
+    });
+    expect(worker.ofType('load')).toHaveLength(1);
+  });
+
+  it('reports itself defunct once its worker crashed or was disposed', () => {
+    const crashed = makeTranslator();
+    expect(crashed.translator.defunct).toBe(false);
+    crashed.worker.crash('device lost');
+    expect(crashed.translator.defunct).toBe(true);
+
+    const disposed = makeTranslator();
+    disposed.translator.dispose();
+    expect(disposed.translator.defunct).toBe(true);
+  });
 });

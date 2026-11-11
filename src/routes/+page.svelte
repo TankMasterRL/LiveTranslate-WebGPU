@@ -2,11 +2,12 @@
   import { onDestroy, onMount } from 'svelte';
   import type { CaptureKind } from '$lib/audio/source';
   import { EnergyVad, type Vad, type VadEngineKind } from '$lib/audio/vad';
-  import { createAsrEngine, DEFAULT_ASR_SETTINGS, type AsrSettings } from '$lib/asr/factory';
+  import { AsrEnginePool, DEFAULT_ASR_SETTINGS, type AsrSettings } from '$lib/asr/factory';
   import { detectWebGPU, type WebGPUSupport } from '$lib/asr/webgpu';
   import { detectBrowserCompat, nemotronSupport, type BrowserCompat } from '$lib/compat';
   import type { AsrEngine } from '$lib/pipeline.svelte';
   import { TranscriptionPipeline } from '$lib/pipeline.svelte';
+  import { ModelPool } from '$lib/model-pool';
   import { loadPersisted, savePersisted } from '$lib/persist';
   import { makeCue } from '$lib/subtitles/cue';
   import { SubtitleTrack } from '$lib/subtitles/track.svelte';
@@ -51,10 +52,13 @@
   let vadEngine = $state<VadEngineKind>(persisted.vadEngine);
   let asrSettings = $state<AsrSettings>(persisted.asr);
   let pipeline = $state<TranscriptionPipeline | null>(null);
-  // The engine the current pipeline was built with; a settings change means
-  // the next start builds a fresh pipeline (and worker) instead of reusing it.
-  let asr: AsrEngine | null = null;
-  let activeAsrKey: string | null = null;
+  // Loaded models live for the whole session: switching models — or back —
+  // reuses the one already loaded instead of reloading its weights.
+  const asrEngines = new AsrEnginePool();
+  const localTranslators = new ModelPool<Record<string, WebGpuTranslator>>();
+  // The engine the current pipeline drives; picking another engine builds a
+  // pipeline around that one (pooled, so usually already loaded).
+  let pipelineAsr: AsrEngine | null = null;
 
   let translationSettings = $state<TranslationSettings>(persisted.translation);
   let translateProgress = $state(0);
@@ -91,7 +95,8 @@
 
   onDestroy(() => {
     pipeline?.stop();
-    if (translator instanceof WebGpuTranslator) translator.dispose();
+    asrEngines.dispose();
+    localTranslators.dispose();
   });
 
   function applyTranslation() {
@@ -100,12 +105,19 @@
     try {
       const next = createTranslator(translationSettings, {
         createLocal: (choice) => {
-          const local = new WebGpuTranslator(choice);
-          local.onProgress((fraction) => (translateProgress = fraction));
+          // NLLB serves every language pair from one model, so a new pair
+          // retargets the loaded one instead of loading it again.
+          const local = localTranslators.acquire(choice.model, () => new WebGpuTranslator(choice));
+          local.setLanguages(choice);
+          // A model switched away from mid-download keeps downloading, so
+          // switching back doesn't restart it from zero — but it must not
+          // drive the progress bar of the model now applied.
+          local.onProgress((fraction) => {
+            if (translator === local) translateProgress = fraction;
+          });
           return local;
         }
       });
-      if (translator instanceof WebGpuTranslator) translator.dispose();
       translator = next;
       pipeline?.setTranslator(next);
       // Fetch the weights now, not on the first utterance — lines spoken
@@ -162,15 +174,15 @@
 
   async function startTranscription() {
     const { vad, notice } = await buildVad();
-    const asrKey = JSON.stringify($state.snapshot(asrSettings));
-    if (pipeline && activeAsrKey !== asrKey) {
+    // A changed language or chunk size is applied to the pooled engine; only
+    // a different engine (or one whose worker died) means a new pipeline.
+    const asr = asrEngines.acquire($state.snapshot(asrSettings));
+    if (pipeline && pipelineAsr !== asr) {
       await pipeline.stop();
-      asr?.dispose?.();
       pipeline = null;
     }
     if (!pipeline) {
-      asr = createAsrEngine(asrSettings);
-      activeAsrKey = asrKey;
+      pipelineAsr = asr;
       pipeline = new TranscriptionPipeline({
         track,
         asr,

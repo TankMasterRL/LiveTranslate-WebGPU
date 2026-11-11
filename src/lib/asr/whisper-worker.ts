@@ -32,7 +32,15 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
   const message = event.data;
   try {
     if (message.type === 'load') {
-      loading ??= load(message.model ?? 'onnx-community/whisper-base', message.backend ?? 'webgpu');
+      // Forget a failed load so the next request retries it (a network blip
+      // mid-download) instead of replaying the same rejection forever.
+      loading ??= load(
+        message.model ?? 'onnx-community/whisper-base',
+        message.backend ?? 'webgpu'
+      ).catch((err) => {
+        loading = null;
+        throw err;
+      });
       await loading;
       ctx.postMessage({ type: 'ready' });
       return;
@@ -50,10 +58,12 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
       const text: string = item?.text ?? '';
       const toMs = (seconds: number | null | undefined) =>
         seconds == null ? null : Math.round(seconds * 1000);
-      const segments = ((item?.chunks ?? []) as Array<{
-        text?: string;
-        timestamp?: [number | null, number | null];
-      }>).map((chunk) => ({
+      const segments = (
+        (item?.chunks ?? []) as Array<{
+          text?: string;
+          timestamp?: [number | null, number | null];
+        }>
+      ).map((chunk) => ({
         text: chunk.text ?? '',
         startMs: toMs(chunk.timestamp?.[0]),
         endMs: toMs(chunk.timestamp?.[1])

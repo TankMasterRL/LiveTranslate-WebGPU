@@ -42,7 +42,7 @@ export interface AsrWorkerClientOptions {
 export class AsrWorkerClient implements AsrEngine {
   readonly #worker: AsrWorkerLike;
   readonly #loadExtras: Record<string, unknown>;
-  readonly #transcribeExtras: Record<string, unknown>;
+  #transcribeExtras: Record<string, unknown>;
   #seq = 0;
   #pending = new Map<
     number,
@@ -84,6 +84,20 @@ export class AsrWorkerClient implements AsrEngine {
 
   onProgress(callback: (fraction: number) => void): void {
     this.#progress = callback;
+  }
+
+  /** True once the worker crashed or was disposed: this client can never work again. */
+  get defunct(): boolean {
+    return this.#failure !== null;
+  }
+
+  /**
+   * Replace the extras merged into every `transcribe` message — runtime
+   * options that change without reloading the model. They apply to every
+   * transcription posted from now on, including ones already queued.
+   */
+  protected setTranscribeExtras(extras: Record<string, unknown>): void {
+    this.#transcribeExtras = extras;
   }
 
   load(backend: AsrBackend): Promise<void> {

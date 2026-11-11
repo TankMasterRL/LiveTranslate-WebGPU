@@ -327,6 +327,58 @@ describe('NemotronEngine', () => {
     expect(engine.chunkMs).toBe(NEMOTRON_NATIVE_CHUNK.ms);
   });
 
+  it('switches to a new chunk setting from the next utterance, without a new engine', async () => {
+    const chunk = nemotronChunkSize(160);
+    const { sessions, encodeCalls } = makeFakes();
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => chunk.newFrames)
+    );
+    engine.setChunkSetting('160');
+    await engine.transcribe(new Float32Array(1), undefined);
+
+    expect(engine.chunkMs).toBe(160);
+    expect(encodeCalls[0].mel.length).toBe(chunk.encoderInputFrames * nMels);
+  });
+
+  it('keeps the adapted size when the unchanged setting is re-applied', async () => {
+    // Every transcribe message carries the setting, so re-applying the same
+    // one must not throw away what 'auto' has learned about the backlog.
+    const { sessions } = makeFakes();
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames)
+    );
+    await engine.transcribe(new Float32Array(1), undefined, 2);
+    const adapted = engine.chunkMs;
+    expect(adapted).toBeGreaterThan(NEMOTRON_NATIVE_CHUNK.ms);
+
+    engine.setChunkSetting('auto');
+    expect(engine.chunkMs).toBe(adapted);
+  });
+
+  it('gives a newly chosen setting a fresh start after an earlier size failed', async () => {
+    // As when changing the setting meant a new worker: the native-size pin
+    // guards the setting that failed, not every later choice.
+    const options: FakeOptions = { onlyInputFrames: encoderInputFrames };
+    const { sessions } = makeFakes(options);
+    const engine = new NemotronEngine(
+      sessions,
+      VOCAB,
+      fakeExtractor(() => newFrames),
+      { chunkSetting: '1120' }
+    );
+    await engine.transcribe(new Float32Array(1), undefined);
+    expect(engine.chunkMs).toBe(NEMOTRON_NATIVE_CHUNK.ms);
+
+    delete options.onlyInputFrames;
+    engine.setChunkSetting('320');
+    await engine.transcribe(new Float32Array(1), undefined);
+    expect(engine.chunkMs).toBe(320);
+  });
+
   it('propagates a failure at the native chunk size instead of looping', async () => {
     const { sessions } = makeFakes({ onlyInputFrames: -1 });
     const engine = new NemotronEngine(

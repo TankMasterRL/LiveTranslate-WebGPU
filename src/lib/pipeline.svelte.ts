@@ -26,6 +26,12 @@ export interface AsrEngine {
   transcribe(audio: Float32Array): Promise<AsrResult>;
   onProgress?(callback: (fraction: number) => void): void;
   dispose?(): void;
+  /**
+   * True once the engine can never work again (its worker crashed or was
+   * disposed). Engines are pooled across pipelines (see AsrEnginePool), and a
+   * defunct one is rebuilt rather than handed out again.
+   */
+  readonly defunct?: boolean;
 }
 
 interface CaptureLike {

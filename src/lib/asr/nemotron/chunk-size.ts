@@ -7,7 +7,8 @@ import {
 
 /**
  * The streaming chunk size as a *setting*: what the UI select, the persisted
- * preferences and the worker's `load` message carry. 'auto' adapts at runtime
+ * preferences and every `transcribe` message to the worker carry (a runtime
+ * option, so changing it never reloads the model). 'auto' adapts at runtime
  * (see ChunkSizeController); the rest are operating points in milliseconds.
  *
  * Deliberately a string union rather than `number | 'auto'`: loadPersisted

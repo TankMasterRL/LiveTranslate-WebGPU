@@ -137,6 +137,11 @@ Two engines in the **Live transcription** panel's _Recognition model_ select:
   prompt dictionary; _Auto-detect_ lets the model identify the language itself.
   All six model files are integrity-pinned by SHA-256, like the Silero VAD.
 
+Each engine loads once per page session: switching engines — and back — reuses
+the one already in memory, and a new spoken language or chunk size is applied
+to the loaded Nemotron rather than reloading it. The trade-off is memory: every
+engine you have started stays loaded until the page is closed.
+
 ### Streaming chunk size
 
 The model card exposes five streaming operating points — 80, 160, 320, 560 and
@@ -183,6 +188,8 @@ Three modes in the **Translation** panel (default: off, transcribe-only):
   - Output is capped at about twice the source length and repeated 4-grams are
     banned, so a garbled input can't decode hundreds of tokens of loop.
   - The model downloads as soon as you click **Apply**; weights are browser-cached.
+    A model you switch away from stays loaded (and keeps downloading if it hadn't
+    finished), so switching back — or to another NLLB language pair — is instant.
 - **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
   chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
   browser and is only sent to the endpoint you configure. A request that hasn't

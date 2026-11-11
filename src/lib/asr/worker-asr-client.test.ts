@@ -181,6 +181,23 @@ describe('AsrWorkerClient', () => {
     await expect(load).rejects.toThrow(/^speech recognition worker crashed$/i);
   });
 
+  it('reports itself defunct once its worker crashed or was disposed, not after a failed load', () => {
+    // A pool hands loaded engines back out; one whose worker is gone must be
+    // replaced, while a failed download may simply be retried.
+    const loadFailed = makeClient();
+    void loadFailed.client.load('webgpu').catch(() => {});
+    loadFailed.worker.emit({ type: 'error', message: 'weights 404' });
+    expect(loadFailed.client.defunct).toBe(false);
+
+    const crashed = makeClient();
+    crashed.worker.crash('device lost');
+    expect(crashed.client.defunct).toBe(true);
+
+    const disposed = makeClient();
+    disposed.client.dispose();
+    expect(disposed.client.defunct).toBe(true);
+  });
+
   it('rejects pending work instead of leaving it hanging when disposed', async () => {
     const { client } = makeClient();
     const load = client.load('webgpu');

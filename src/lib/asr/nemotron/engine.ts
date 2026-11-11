@@ -1,5 +1,9 @@
 import type { AsrResult } from '../transcript';
-import { ChunkSizeController, type NemotronChunkSetting } from './chunk-size';
+import {
+  ChunkSizeController,
+  DEFAULT_NEMOTRON_CHUNK,
+  type NemotronChunkSetting
+} from './chunk-size';
 import { NEMOTRON, nemotronLangId, type NemotronChunkSize } from './model';
 import { LogMelExtractor } from './features';
 import { decodeUtterance, type EmittedToken } from './tokenizer';
@@ -78,7 +82,8 @@ export class NemotronEngine {
   readonly #sessions: NemotronSessions;
   readonly #vocab: string[];
   readonly #extractor: Pick<LogMelExtractor, 'frames'>;
-  readonly #chunks: ChunkSizeController;
+  #chunkSetting: NemotronChunkSetting;
+  #chunks: ChunkSizeController;
   #silentUtterances = 0;
 
   constructor(
@@ -90,12 +95,26 @@ export class NemotronEngine {
     this.#sessions = sessions;
     this.#vocab = vocab;
     this.#extractor = extractor;
-    this.#chunks = new ChunkSizeController(options.chunkSetting);
+    this.#chunkSetting = options.chunkSetting ?? DEFAULT_NEMOTRON_CHUNK;
+    this.#chunks = new ChunkSizeController(this.#chunkSetting);
   }
 
   /** The chunk size the next utterance will be decoded at. */
   get chunkMs(): number {
     return this.#chunks.current.ms;
+  }
+
+  /**
+   * Switch the chunk setting from the next utterance on — a runtime knob, so
+   * the loaded sessions are kept. Re-applying the current setting is a no-op
+   * (the worker passes it with every utterance, and 'auto' must keep what it
+   * has adapted to); a different one starts a fresh controller, clearing any
+   * native-size pin the way a new worker used to.
+   */
+  setChunkSetting(setting: NemotronChunkSetting): void {
+    if (setting === this.#chunkSetting) return;
+    this.#chunkSetting = setting;
+    this.#chunks = new ChunkSizeController(setting);
   }
 
   /**

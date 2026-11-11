@@ -46,7 +46,12 @@ ctx.onmessage = async (event: MessageEvent<InboundMessage>) => {
   const message = event.data;
   try {
     if (message.type === 'load') {
-      loading ??= load(message);
+      // Forget a failed load so the next request retries it (a network blip
+      // mid-download) instead of replaying the same rejection forever.
+      loading ??= load(message).catch((err) => {
+        loading = null;
+        throw err;
+      });
       await loading;
       ctx.postMessage({ type: 'ready' });
       return;
