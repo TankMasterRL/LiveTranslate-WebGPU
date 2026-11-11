@@ -7,7 +7,18 @@ export interface OpenAITranslatorConfig {
   model: string;
   targetLang: string;
   sourceLang?: string;
+  /**
+   * Give up on a request that hasn't completed in this long (default 10s).
+   * Translations run one at a time, so a hung request would otherwise hold
+   * every later line's translation forever.
+   */
+  timeoutMs?: number;
+  /** fetch implementation (a seam for tests; defaults to the global). */
+  fetch?: typeof fetch;
 }
+
+/** Default for {@link OpenAITranslatorConfig.timeoutMs}. */
+export const DEFAULT_API_TIMEOUT_MS = 10_000;
 
 /** Build the fetch request for a single translation (pure — easy to test). */
 export function buildTranslationRequest(
@@ -59,8 +70,35 @@ export class OpenAITranslator implements Translator {
 
   async translate(text: string, options: TranslateOptions = {}): Promise<string> {
     const { url, init } = buildTranslationRequest(this.#config, text);
-    const response = await fetch(url, { ...init, signal: options.signal });
-    if (!response.ok) throw new Error(`Translation API returned ${response.status}`);
-    return parseTranslationResponse(await response.json());
+    const timeoutMs = this.#config.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+    // Called unbound: a browser's fetch throws "Illegal invocation" when
+    // called as a method of anything but the window.
+    const doFetch = this.#config.fetch ?? fetch;
+
+    // One controller aborts on either the timeout or the caller's signal,
+    // covering the response body as well as the request.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    const forwardAbort = () => controller.abort(options.signal?.reason);
+    if (options.signal?.aborted) forwardAbort();
+    options.signal?.addEventListener('abort', forwardAbort);
+
+    try {
+      const response = await doFetch(url, { ...init, signal: controller.signal });
+      if (!response.ok) throw new Error(`Translation API returned ${response.status}`);
+      return parseTranslationResponse(await response.json());
+    } catch (err) {
+      if (timedOut) {
+        throw new Error(`Translation API did not respond within ${timeoutMs / 1000}s`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', forwardAbort);
+    }
   }
 }

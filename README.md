@@ -185,7 +185,8 @@ Three modes in the **Translation** panel (default: off, transcribe-only):
   - The model downloads as soon as you click **Apply**; weights are browser-cached.
 - **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
   chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
-  browser and is only sent to the endpoint you configure.
+  browser and is only sent to the endpoint you configure. A request that hasn't
+  answered within 10 s is abandoned and its line shown untranslated.
 
 Settings apply live via `pipeline.setTranslator(...)` — no need to restart capture.
 Translation is best-effort: if it fails, the untranslated transcription still shows.
