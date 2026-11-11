@@ -18,6 +18,7 @@ export type AsrWorkerOutbound =
 export interface AsrWorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
   onmessage: ((event: MessageEvent<AsrWorkerOutbound>) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
   terminate(): void;
 }
 
@@ -61,6 +62,8 @@ export class AsrWorkerClient implements AsrEngine {
    */
   #busy = false;
   #queued: Array<() => void> = [];
+  /** Set once the worker is gone (crashed or disposed): everything rejects. */
+  #failure: Error | null = null;
 
   constructor(options: AsrWorkerClientOptions) {
     this.#loadExtras = options.loadExtras ?? {};
@@ -68,6 +71,15 @@ export class AsrWorkerClient implements AsrEngine {
     this.#worker = options.createWorker();
     this.#worker.onmessage = (event: MessageEvent<AsrWorkerOutbound>) =>
       this.#onMessage(event.data);
+    // An uncaught error (out of memory, a lost GPU device, a failed module
+    // import) kills the worker without a protocol message. Without this the
+    // in-flight transcription would never settle and, since transcriptions
+    // are serialized, neither would any queued behind it — recognition would
+    // silently stop.
+    this.#worker.onerror = (event: ErrorEvent) =>
+      this.#fail(
+        new Error(`Speech recognition worker crashed${event.message ? `: ${event.message}` : ''}`)
+      );
   }
 
   onProgress(callback: (fraction: number) => void): void {
@@ -75,6 +87,7 @@ export class AsrWorkerClient implements AsrEngine {
   }
 
   load(backend: AsrBackend): Promise<void> {
+    if (this.#failure) return Promise.reject(this.#failure);
     return new Promise((resolve, reject) => {
       this.#readyResolvers.push({ resolve, reject });
       this.#worker.postMessage({ type: 'load', backend, ...this.#loadExtras });
@@ -82,6 +95,7 @@ export class AsrWorkerClient implements AsrEngine {
   }
 
   transcribe(audio: Float32Array): Promise<AsrResult> {
+    if (this.#failure) return Promise.reject(this.#failure);
     const id = ++this.#seq;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -113,6 +127,15 @@ export class AsrWorkerClient implements AsrEngine {
 
   dispose(): void {
     this.#worker.terminate();
+    this.#fail(new Error('ASR engine disposed'));
+  }
+
+  /** The worker is gone: reject pending loads and every pending or queued transcription. */
+  #fail(error: Error): void {
+    this.#failure ??= error;
+    for (const { reject } of this.#readyResolvers) reject(error);
+    this.#readyResolvers = [];
+    for (const { reject } of this.#pending.values()) reject(error);
     this.#pending.clear();
     this.#queued = [];
     this.#busy = false;
