@@ -13,6 +13,7 @@ export type TranslateWorkerOutbound =
 export interface TranslateWorkerLike {
   postMessage(message: unknown): void;
   onmessage: ((event: MessageEvent<TranslateWorkerOutbound>) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
   terminate(): void;
 }
 
@@ -41,6 +42,8 @@ export class WebGpuTranslator implements Translator {
   #readyResolve: (() => void) | null = null;
   #readyReject: ((e: Error) => void) | null = null;
   #progress?: (fraction: number) => void;
+  /** Set once the worker is gone (crashed or disposed): everything rejects. */
+  #failure: Error | null = null;
 
   constructor(
     choice: Extract<LocalModelChoice, { ok: true }>,
@@ -54,6 +57,14 @@ export class WebGpuTranslator implements Translator {
     )();
     this.#worker.onmessage = (event: MessageEvent<TranslateWorkerOutbound>) =>
       this.#onMessage(event.data);
+    // An uncaught error (out of memory, a lost GPU device, a failed module
+    // import) kills the worker without a protocol message. Without this every
+    // pending promise would hang — and the pipeline waits on a line's
+    // translation before committing it, so its transcription would vanish too.
+    this.#worker.onerror = (event: ErrorEvent) =>
+      this.#fail(
+        new Error(`Translation worker crashed${event.message ? `: ${event.message}` : ''}`)
+      );
   }
 
   onProgress(callback: (fraction: number) => void): void {
@@ -69,6 +80,7 @@ export class WebGpuTranslator implements Translator {
     this.#loaded ??= (async () => {
       const { backend, dtype } = chooseTranslationRuntime(await this.#detect());
       await new Promise<void>((resolve, reject) => {
+        if (this.#failure) return reject(this.#failure);
         this.#readyResolve = resolve;
         this.#readyReject = reject;
         this.#worker.postMessage({ type: 'load', model: this.#choice.model, backend, dtype });
@@ -79,6 +91,7 @@ export class WebGpuTranslator implements Translator {
 
   async translate(text: string, _options: TranslateOptions = {}): Promise<string> {
     await this.load();
+    if (this.#failure) throw this.#failure;
     const id = ++this.#seq;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -94,8 +107,16 @@ export class WebGpuTranslator implements Translator {
 
   dispose(): void {
     this.#worker.terminate();
-    const cancelled = new Error('Translator disposed');
-    for (const { reject } of this.#pending.values()) reject(cancelled);
+    this.#fail(new Error('Translator disposed'));
+  }
+
+  /** The worker is gone: reject the pending load and every pending request. */
+  #fail(error: Error): void {
+    this.#failure ??= error;
+    this.#readyReject?.(error);
+    this.#readyResolve = null;
+    this.#readyReject = null;
+    for (const { reject } of this.#pending.values()) reject(error);
     this.#pending.clear();
   }
 

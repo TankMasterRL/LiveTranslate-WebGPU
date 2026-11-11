@@ -89,6 +89,48 @@ describe('WebGpuTranslator', () => {
     await expect(result).resolves.toBe('hello');
   });
 
+  it('loads the model once however often load() and translate() ask for it', async () => {
+    const { worker, translator } = makeTranslator();
+    void translator.load();
+    void translator.load();
+    void translator.translate('hola');
+    await settle();
+    expect(worker.ofType('load')).toHaveLength(1);
+  });
+
+  it('rejects in-flight translations when the worker crashes, and fails fast afterwards', async () => {
+    const { worker, translator } = makeTranslator();
+    void translator.load();
+    await settle();
+    worker.emit({ type: 'ready' });
+    const inFlight = translator.translate('hola');
+    await settle();
+
+    // An uncaught error kills the worker without any protocol message;
+    // without this the promise would never settle.
+    worker.crash('out of memory');
+    await expect(inFlight).rejects.toThrow(/translation worker crashed: out of memory/i);
+    await expect(translator.translate('adiós')).rejects.toThrow(/crashed/i);
+    expect(worker.ofType('translate')).toHaveLength(1);
+  });
+
+  it('rejects the pending load when the worker crashes while loading', async () => {
+    const { worker, translator } = makeTranslator();
+    const load = translator.load();
+    await settle();
+    worker.crash('device lost');
+    await expect(load).rejects.toThrow(/crashed: device lost/i);
+  });
+
+  it('rejects a translation still waiting for the model when disposed', async () => {
+    const { worker, translator } = makeTranslator();
+    const waiting = translator.translate('hola');
+    await settle();
+    translator.dispose();
+    await expect(waiting).rejects.toThrow('Translator disposed');
+    expect(worker.terminated).toBe(true);
+  });
+
   it('rejects the pending load when the worker reports an id-less error', async () => {
     const { worker, translator } = makeTranslator();
     const result = translator.translate('hola');

@@ -182,7 +182,7 @@ Three modes in the **Translation** panel (default: off, transcribe-only):
     WebGPU kernels and would bounce through the CPU on every generated token.
   - Output is capped at about twice the source length and repeated 4-grams are
     banned, so a garbled input can't decode hundreds of tokens of loop.
-  - Weights download once and are browser-cached.
+  - The model downloads as soon as you click **Apply**; weights are browser-cached.
 - **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
   chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
   browser and is only sent to the endpoint you configure.
