@@ -108,6 +108,14 @@
       if (translator instanceof WebGpuTranslator) translator.dispose();
       translator = next;
       pipeline?.setTranslator(next);
+      // Fetch the weights now, not on the first utterance — lines spoken
+      // during a lazy download would all wait on it.
+      if (next instanceof WebGpuTranslator) {
+        next.load().catch((err) => {
+          if (translator === next)
+            translateError = err instanceof Error ? err.message : String(err);
+        });
+      }
     } catch (err) {
       translateError = err instanceof Error ? err.message : String(err);
     }

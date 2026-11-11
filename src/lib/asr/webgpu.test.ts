@@ -16,6 +16,17 @@ describe('detectWebGPU', () => {
     expect(result.supported).toBe(true);
   });
 
+  it('reports fp16 support when the adapter offers shader-f16', async () => {
+    const adapter = { features: new Set(['shader-f16']) };
+    const gpu = { requestAdapter: vi.fn().mockResolvedValue(adapter) };
+    expect(await detectWebGPU(navWith(gpu))).toEqual({ supported: true, fp16: true });
+  });
+
+  it('reports no fp16 support when the adapter lacks shader-f16', async () => {
+    const gpu = { requestAdapter: vi.fn().mockResolvedValue({ features: new Set() }) };
+    expect(await detectWebGPU(navWith(gpu))).toEqual({ supported: true, fp16: false });
+  });
+
   it('reports unsupported when no adapter is available', async () => {
     const gpu = { requestAdapter: vi.fn().mockResolvedValue(null) };
     const result = await detectWebGPU(navWith(gpu));

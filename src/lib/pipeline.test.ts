@@ -35,6 +35,9 @@ function baseDeps(track: SubtitleTrack, capture: ReturnType<typeof makeFakeCaptu
   };
 }
 
+// Let queued continuations (ASR results, queue hand-offs) run.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 // loud(3000) + quiet(100, hangover) form a 3100-sample chunk = 194ms @16k.
 const CHUNK_MS = Math.round((3100 / 16_000) * 1000);
 
@@ -112,6 +115,61 @@ describe('TranscriptionPipeline', () => {
     // Last cue keeps its true start but stays on screen for reading time.
     expect(track.cues[1].startMs).toBe(start + 100);
     expect(track.cues[1].endMs).toBe(clock + 1800);
+  });
+
+  it('measures the reading window from when the cue is committed, so slow translation cannot expire it', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let clock = 10_000;
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      asr: asrOf(() => ({ text: 'hola' })),
+      translator: {
+        translate: async (t) => {
+          clock += 5_000; // translation outlasts the 1.8s minimum reading time
+          return `EN:${t}`;
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    // Still starts when it was spoken...
+    expect(track.cues[0].startMs).toBe(10_000 - CHUNK_MS);
+    // ...but is readable for its full reading time once it finally appears,
+    // instead of being committed already expired.
+    expect(track.cues[0].endMs).toBe(15_000 + 1800);
+    expect(track.activeAt(15_000)).toBe(track.cues[0]);
+  });
+
+  it('applies a fixed displayMs from commit time too, covering ASR latency', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let clock = 10_000;
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      displayMs: 4000,
+      asr: {
+        load: vi.fn().mockResolvedValue(undefined),
+        transcribe: async () => {
+          clock += 3_000;
+          return { text: 'hola' };
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    expect(track.cues[0].startMs).toBe(10_000 - CHUNK_MS);
+    expect(track.cues[0].endMs).toBe(13_000 + 4000);
   });
 
   it('swaps the translator at runtime without restarting capture', async () => {
@@ -211,6 +269,162 @@ describe('TranscriptionPipeline', () => {
     utterance(capture);
     await vi.waitFor(() => expect(track.cues.length).toBe(1));
     expect(pipeline.notice).toBeNull();
+  });
+
+  it('translates a multi-segment utterance once, as a single cue', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const clock = 10_000;
+    const translate = vi.fn(async (t: string) => `EN:${t}`);
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      asr: asrOf(() => ({
+        text: ' fui a la tienda y compré leche',
+        segments: [
+          { text: ' fui a la tienda', startMs: 0, endMs: 100 },
+          { text: ' y compré leche', startMs: 100, endMs: null }
+        ]
+      })),
+      translator: { translate }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(1));
+    // Fragments translate incoherently; the model gets the whole sentence.
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(translate).toHaveBeenCalledWith('fui a la tienda y compré leche');
+    expect(track.cues[0]).toMatchObject({
+      text: 'fui a la tienda y compré leche',
+      translation: 'EN:fui a la tienda y compré leche',
+      startMs: clock - CHUNK_MS
+    });
+  });
+
+  it('runs one translation at a time across overlapping utterances', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    const pending: Array<() => void> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      asr: asrOf(() => ({ text: 'hola' })),
+      translator: {
+        translate: (t) => {
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          return new Promise((resolve) =>
+            pending.push(() => {
+              inFlight--;
+              resolve(`EN:${t}`);
+            })
+          );
+        }
+      }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+    utterance(capture);
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    await settle();
+    expect(pending).toHaveLength(1); // the second waits for the first
+
+    pending.shift()!();
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    pending.shift()!();
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    expect(maxInFlight).toBe(1);
+    expect(track.cues.map((c) => c.translation)).toEqual(['EN:hola', 'EN:hola']);
+  });
+
+  it('commits a line untranslated, with a notice, once it has waited too long for the translator', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let clock = 10_000;
+    let release: (() => void) | null = null;
+    const translate = vi.fn(
+      (t: string) =>
+        new Promise<string>((resolve) => {
+          release = () => resolve(`EN:${t}`);
+        })
+    );
+    let response = 'uno';
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      nowMs: () => clock,
+      maxTranslationWaitMs: 2000,
+      asr: asrOf(() => ({ text: response })),
+      translator: { translate }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture); // 'uno' starts translating and gets stuck
+    await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+    response = 'dos';
+    utterance(capture); // 'dos' queues behind it
+    await settle();
+
+    clock += 2500; // 'dos' has now waited longer than allowed
+    release!();
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    expect(track.cues[0]).toMatchObject({ text: 'uno', translation: 'EN:uno' });
+    // Skipped rather than translated late: shown as transcribed, never lost.
+    expect(track.cues[1].text).toBe('dos');
+    expect(track.cues[1].translation).toBeUndefined();
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(pipeline.notice).toMatch(/falling behind/i);
+    expect(pipeline.error).toBeNull();
+
+    // Once a line reaches an idle translator again, it is keeping up.
+    response = 'tres';
+    utterance(capture);
+    await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(2));
+    release!();
+    await vi.waitFor(() => expect(track.cues.length).toBe(3));
+    expect(track.cues[2].translation).toBe('EN:tres');
+    expect(pipeline.notice).toBeNull();
+  });
+
+  it('commits a queued line untranslated when translation is turned off meanwhile', async () => {
+    const track = new SubtitleTrack();
+    const capture = makeFakeCapture();
+    let release: (() => void) | null = null;
+    const translate = vi.fn(
+      (t: string) =>
+        new Promise<string>((resolve) => {
+          release = () => resolve(`EN:${t}`);
+        })
+    );
+    const deps: PipelineDeps = {
+      ...baseDeps(track, capture),
+      asr: asrOf(() => ({ text: 'hola' })),
+      translator: { translate }
+    };
+    const pipeline = new TranscriptionPipeline(deps);
+    await pipeline.start('microphone');
+
+    utterance(capture);
+    await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+    utterance(capture);
+    await settle();
+
+    pipeline.setTranslator(null);
+    release!();
+
+    await vi.waitFor(() => expect(track.cues.length).toBe(2));
+    expect(track.cues[0].translation).toBe('EN:hola');
+    expect(track.cues[1].translation).toBeUndefined();
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(pipeline.error).toBeNull();
   });
 
   it('commits the untranslated cue and surfaces the error when translation fails', async () => {

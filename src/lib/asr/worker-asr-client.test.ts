@@ -4,6 +4,7 @@ import { AsrWorkerClient, type AsrWorkerLike, type AsrWorkerOutbound } from './w
 class FakeWorker implements AsrWorkerLike {
   posted: Array<{ message: Record<string, unknown>; transfer?: Transferable[] }> = [];
   onmessage: ((event: MessageEvent<AsrWorkerOutbound>) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
   terminated = false;
 
   postMessage(message: unknown, transfer?: Transferable[]): void {
@@ -16,6 +17,10 @@ class FakeWorker implements AsrWorkerLike {
 
   emit(message: AsrWorkerOutbound): void {
     this.onmessage?.({ data: message } as MessageEvent<AsrWorkerOutbound>);
+  }
+
+  crash(message: string): void {
+    this.onerror?.({ message } as ErrorEvent);
   }
 }
 
@@ -151,5 +156,39 @@ describe('AsrWorkerClient', () => {
     const { worker, client } = makeClient();
     client.dispose();
     expect(worker.terminated).toBe(true);
+  });
+
+  it('rejects the in-flight and queued transcriptions when the worker crashes, and fails fast afterwards', async () => {
+    // An uncaught error (out of memory, a lost GPU device) kills the worker
+    // without any protocol message; without onerror these would never settle.
+    const { worker, client } = makeClient();
+    const inFlight = client.transcribe(new Float32Array([1]));
+    const queued = client.transcribe(new Float32Array([2]));
+
+    worker.crash('out of memory');
+    await expect(inFlight).rejects.toThrow(/speech recognition worker crashed: out of memory/i);
+    await expect(queued).rejects.toThrow(/crashed/i);
+    await expect(client.transcribe(new Float32Array([3]))).rejects.toThrow(/crashed/i);
+    await expect(client.load('webgpu')).rejects.toThrow(/crashed/i);
+    // Neither the queued nor the later chunk was handed to the dead worker.
+    expect(worker.posted).toHaveLength(1);
+  });
+
+  it('rejects a pending load when the worker crashes while loading', async () => {
+    const { worker, client } = makeClient();
+    const load = client.load('webgpu');
+    worker.crash('');
+    await expect(load).rejects.toThrow(/^speech recognition worker crashed$/i);
+  });
+
+  it('rejects pending work instead of leaving it hanging when disposed', async () => {
+    const { client } = makeClient();
+    const load = client.load('webgpu');
+    const inFlight = client.transcribe(new Float32Array([1]));
+    const queued = client.transcribe(new Float32Array([2]));
+    client.dispose();
+    await expect(load).rejects.toThrow('ASR engine disposed');
+    await expect(inFlight).rejects.toThrow('ASR engine disposed');
+    await expect(queued).rejects.toThrow('ASR engine disposed');
   });
 });

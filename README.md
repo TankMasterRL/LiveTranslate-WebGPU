@@ -172,17 +172,27 @@ utterance at 560 ms and pins itself there for the rest of the session.
 Three modes in the **Translation** panel (default: off, transcribe-only):
 
 - **Local model (WebGPU)** — translation runs entirely in your browser:
-  - _Auto → English_ uses `Xenova/opus-mt-mul-en` (~50 MB, fast, any source).
-  - Any other pair uses `Xenova/nllb-200-distilled-600M` (~600 MB q8, 12 curated
-    languages) and needs an explicit source language — Whisper doesn't reliably
-    report what it heard.
-  - Weights download once and are browser-cached.
+  - _Auto → English_ uses `Xenova/opus-mt-mul-en` (fast, any source).
+  - Any other pair uses `Xenova/nllb-200-distilled-600M` (12 curated languages)
+    and needs an explicit source language — Whisper doesn't reliably report what
+    it heard.
+  - Precision follows the GPU: **fp16 on WebGPU** when the adapter supports
+    `shader-f16` (~220 MB opus-mt / ~1.8 GB NLLB), otherwise **q8 on WASM**
+    (~110 MB / ~900 MB). q8 never runs on WebGPU: its quantized matmuls have no
+    WebGPU kernels and would bounce through the CPU on every generated token.
+  - Output is capped at about twice the source length and repeated 4-grams are
+    banned, so a garbled input can't decode hundreds of tokens of loop.
+  - The model downloads as soon as you click **Apply**; weights are browser-cached.
 - **API (OpenAI-compatible)** — mirrors the original LiveTranslate: point it at any
   chat-completions endpoint (OpenAI, DeepSeek, Ollama, …). The key stays in the
-  browser and is only sent to the endpoint you configure.
+  browser and is only sent to the endpoint you configure. A request that hasn't
+  answered within 10 s is abandoned and its line shown untranslated.
 
 Settings apply live via `pipeline.setTranslator(...)` — no need to restart capture.
 Translation is best-effort: if it fails, the untranslated transcription still shows.
+Each utterance is translated as one line, one at a time; if the translator falls
+behind the speech, a line that has waited more than ~3 s is shown untranslated
+(with a notice) rather than letting every later subtitle arrive later and later.
 
 ## Testing (red/green TDD)
 

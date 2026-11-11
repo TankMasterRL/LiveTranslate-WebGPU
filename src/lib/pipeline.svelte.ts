@@ -3,14 +3,21 @@ import { SpeechChunker, type SpeechChunkerOptions } from './audio/chunker';
 import { requestAudioStream, type CaptureKind } from './audio/source';
 import { EnergyVad, rms, type EnergyVadOptions, type Vad } from './audio/vad';
 import { detectWebGPU, type WebGPUSupport } from './asr/webgpu';
-import { segmentsToCues } from './asr/align';
+import { segmentsToCues, utteranceToCue } from './asr/align';
 import type { AsrResult } from './asr/transcript';
 import { displayText } from './subtitles/cue';
 import { cueDisplayMs } from './subtitles/duration';
 import type { SubtitleTrack } from './subtitles/track.svelte';
+import { SerialQueue } from './translate/serial-queue';
 import type { Translator } from './translate/translator';
 
 export type PipelineStatus = 'idle' | 'loading' | 'listening' | 'error';
+
+/** Default for {@link PipelineDeps.maxTranslationWaitMs}. */
+export const DEFAULT_MAX_TRANSLATION_WAIT_MS = 3000;
+
+const TRANSLATION_BEHIND_NOTICE =
+  'Translation is falling behind the speech — some lines are shown untranslated.';
 export type AsrBackend = 'webgpu' | 'wasm';
 
 /** The ASR seam the pipeline drives (implemented by the Whisper worker client). */
@@ -37,6 +44,12 @@ export interface PipelineDeps {
    * adapts to the displayed text's length (reading speed).
    */
   displayMs?: number;
+  /**
+   * How long (media-timeline ms) a transcribed line may wait for the
+   * translator before it is committed untranslated instead. Bounds how far
+   * subtitles lag the speech when translation runs slower than real time.
+   */
+  maxTranslationWaitMs?: number;
   /** VAD engine to use; defaults to an EnergyVad built from vadOptions. */
   vad?: Vad;
   vadOptions?: EnergyVadOptions;
@@ -65,8 +78,13 @@ export class TranscriptionPipeline {
   #chunker: SpeechChunker;
   #capture: CaptureLike | null = null;
   #translator: Translator | null;
+  /** One translation at a time; lines that wait too long are skipped. */
+  readonly #translations = new SerialQueue();
+  readonly #maxTranslationWaitMs: number;
   /** The notice the ASR engine set, so recovery clears only that notice. */
   #asrNotice: string | null = null;
+  /** Likewise for the translation-is-behind notice. */
+  #translationNotice: string | null = null;
 
   readonly #sampleRate: number;
 
@@ -76,6 +94,7 @@ export class TranscriptionPipeline {
     this.#vad = deps.vad ?? new EnergyVad(deps.vadOptions);
     this.#chunker = new SpeechChunker(deps.chunkerOptions ?? { sampleRate: 16_000 });
     this.#translator = deps.translator ?? null;
+    this.#maxTranslationWaitMs = deps.maxTranslationWaitMs ?? DEFAULT_MAX_TRANSLATION_WAIT_MS;
     this.#sampleRate = deps.chunkerOptions?.sampleRate ?? 16_000;
   }
 
@@ -95,6 +114,7 @@ export class TranscriptionPipeline {
     this.error = null;
     this.notice = null;
     this.#asrNotice = null;
+    this.#translationNotice = null;
     this.status = 'loading';
     this.#vad.reset();
     this.#chunker = new SpeechChunker(this.#deps.chunkerOptions ?? { sampleRate: 16_000 });
@@ -158,10 +178,12 @@ export class TranscriptionPipeline {
       this.#asrNotice = result.notice;
     }
 
-    const cues = segmentsToCues(result, {
-      utteranceStartMs: emissionMs - durationMs,
-      utteranceDurationMs: durationMs
-    });
+    // With a translator the utterance becomes one cue, translated as a
+    // whole: models translate sentences, not Whisper's timestamp fragments.
+    const align = { utteranceStartMs: emissionMs - durationMs, utteranceDurationMs: durationMs };
+    const translating = this.#translator !== null;
+    const whole = translating ? utteranceToCue(result, align) : null;
+    const cues = translating ? (whole ? [whole] : []) : segmentsToCues(result, align);
     if (cues.length === 0) return;
 
     // Recognition recovered: retract a stale engine diagnostic (but never a
@@ -171,27 +193,51 @@ export class TranscriptionPipeline {
       this.#asrNotice = null;
     }
 
-    // Translation is best-effort: a failure surfaces as an error but never
-    // loses the transcription.
-    if (this.#translator) {
-      for (const cue of cues) {
-        try {
-          cue.translation = await this.#translator.translate(cue.text);
-        } catch (err) {
-          this.error = err instanceof Error ? err.message : String(err);
-        }
-      }
-    }
+    if (whole) whole.translation = await this.#translate(whole.text);
 
     // Earlier segments keep their true (past) spans for the transcript; the
     // last one also stays on screen long enough to read — sized by what is
-    // actually shown (the translation when present).
+    // actually shown (the translation when present), and measured from now,
+    // when it is committed: ASR and translation latency must not eat into
+    // the reading time, or a slow enough line is committed already expired
+    // and never appears on the overlay at all.
+    const committedMs = this.#deps.nowMs();
     const last = cues[cues.length - 1];
     last.endMs =
       this.#fixedDisplayMs !== undefined
-        ? emissionMs + this.#fixedDisplayMs
-        : Math.max(last.endMs, emissionMs + cueDisplayMs(displayText(last)));
+        ? committedMs + this.#fixedDisplayMs
+        : Math.max(last.endMs, committedMs + cueDisplayMs(displayText(last)));
 
     for (const cue of cues) this.#deps.track.commit(cue);
+  }
+
+  /**
+   * Translate one line through the one-at-a-time queue. Best-effort: a
+   * failure surfaces as an error, a line that waited longer than
+   * maxTranslationWaitMs is skipped with a notice, and translation turned off
+   * meanwhile just yields nothing — the transcription is never lost.
+   */
+  async #translate(text: string): Promise<string | undefined> {
+    // Work arriving at an idle queue means the translator is keeping up.
+    const keepingUp = this.#translations.idle;
+    const queuedMs = this.#deps.nowMs();
+    try {
+      const outcome = await this.#translations.run(
+        async () => this.#translator?.translate(text),
+        () => this.#deps.nowMs() - queuedMs > this.#maxTranslationWaitMs
+      );
+      if (outcome.skipped) {
+        this.notice = this.#translationNotice = TRANSLATION_BEHIND_NOTICE;
+        return undefined;
+      }
+      if (keepingUp && this.#translationNotice !== null) {
+        if (this.notice === this.#translationNotice) this.notice = null;
+        this.#translationNotice = null;
+      }
+      return outcome.value;
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+      return undefined;
+    }
   }
 }

@@ -85,8 +85,9 @@
 
   {#if settings.mode === 'local'}
     <p class="sub">
-      Runs entirely in your browser. Auto → English uses a small fast model (~50 MB);
-      other pairs use NLLB-200 (~600 MB). Weights download once and are cached.
+      Runs entirely in your browser. Auto → English uses a small fast model (~220 MB); other pairs
+      use NLLB-200 (~1.8 GB) — about half that on GPUs without fp16 support. Weights download once
+      and are cached.
     </p>
   {/if}
 
